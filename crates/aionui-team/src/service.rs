@@ -21,8 +21,8 @@ use aionui_common::{AgentKillReason, ConversationStatus, TimestampMs, generate_i
 use aionui_db::models::TeamRow;
 use aionui_db::{
     ActivityCursor, IAgentMetadataRepository, IAssistantDefinitionRepository, IAssistantOverlayRepository,
-    IProviderRepository, ITeamRepository, IUserOrderStore, OrderItemRef, OrderItemType, PageDirection,
-    UpdateTeamParams,
+    IGlobalSettingsRepository, IProviderRepository, ITeamRepository, IUserOrderStore, OrderItemRef, OrderItemType,
+    PageDirection, UpdateTeamParams,
 };
 use aionui_project::{ProjectService, canonical};
 use aionui_realtime::EventBroadcaster;
@@ -180,6 +180,9 @@ pub struct TeamSessionService {
     /// team's `user_order` rows (design §4.3, path 2). `None` → no-op, so team
     /// deletion behaves exactly as before.
     user_order: Arc<RwLock<Option<Arc<dyn IUserOrderStore>>>>,
+    /// Shared-pool settings (optional). Wired via [`Self::with_global_settings_repo`];
+    /// unset → provider resolution is owner-scoped only.
+    global_settings: RwLock<Option<Arc<dyn IGlobalSettingsRepository>>>,
     /// Back-pointer used by [`TeamSession::spawn_agent`] to reach DB-facing
     /// orchestration without threading the service through every session method.
     /// Stored as `Weak` so the session map does not create a strong cycle with
@@ -305,6 +308,7 @@ impl TeamSessionService {
             ensure_session_locks: Arc::new(DashMap::new()),
             project_service: Arc::new(RwLock::new(None)),
             user_order: Arc::new(RwLock::new(None)),
+            global_settings: RwLock::new(None),
             self_ref: weak.clone(),
         })
     }
@@ -315,6 +319,7 @@ impl TeamSessionService {
             self.agent_metadata_repo.clone(),
             self.assistant_catalog.clone(),
             self.provider_repo.clone(),
+            self.global_settings.read().ok().and_then(|guard| guard.clone()),
             self.conversation_port.clone(),
             self.capability_port.clone(),
         )
@@ -438,6 +443,14 @@ impl TeamSessionService {
     pub fn with_user_order_store(&self, user_order: Arc<dyn IUserOrderStore>) {
         if let Ok(mut guard) = self.user_order.write() {
             *guard = Some(user_order);
+        }
+    }
+
+    /// Inject the shared-pool settings so team provider resolution may fall
+    /// back to shared rows (own first) while the shared-key service is on.
+    pub fn with_global_settings_repo(&self, repo: Arc<dyn IGlobalSettingsRepository>) {
+        if let Ok(mut guard) = self.global_settings.write() {
+            *guard = Some(repo);
         }
     }
 

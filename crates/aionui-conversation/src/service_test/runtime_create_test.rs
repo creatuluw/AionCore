@@ -276,7 +276,10 @@ async fn a_relative_workspace_is_rejected_locally_and_a_missing_absolute_one_by_
 
 // ── Assistant override branch ────────────────────────────────────────
 
-use aionui_db::{CreateProviderParams, IProviderRepository, SqliteProviderRepository, UpsertAssistantOverlayParams};
+use aionui_db::{
+    CreateProviderParams, GlobalSettings, IGlobalSettingsRepository, IProviderRepository, SqliteGlobalSettingsRepository,
+    SqliteProviderRepository, UpsertAssistantOverlayParams,
+};
 
 /// An assistant whose default model is FIXED to `model`, bound to `agent_id`.
 async fn upsert_assistant_with_fixed_model(
@@ -430,6 +433,190 @@ async fn an_explicit_aionrs_assistant_gets_the_first_enabled_provider_that_offer
     );
     assert_eq!(model.model, "model-b");
     assert_eq!(model.use_model.as_deref(), Some("model-b"));
+}
+
+/// Provider resolution for assistant default models falls back to shared-pool
+/// rows (own rows first) ONLY while the shared-key service is enabled.
+#[tokio::test]
+async fn aionrs_model_match_falls_back_to_shared_providers_only_while_enabled() {
+    let (svc, _broadcaster, repo, definition_repo, _overlay_repo, _preference_repo) =
+        make_service_with_mock_task_manager_and_assistant_support(Arc::new(MockTaskManager::new())).await;
+    upsert_assistant_with_fixed_model(&definition_repo, "def-rs", "asst-rs", "632f31d2", Some("model-b")).await;
+
+    let db = init_database_memory().await.unwrap();
+    let pool = db.pool().clone();
+    const OTHER: &str = "other_owner";
+    seed_test_user(&pool, USER).await;
+    seed_test_user(&pool, OTHER).await;
+    let provider_repo = SqliteProviderRepository::new(pool.clone());
+    // Own provider: enabled but does NOT offer model-b.
+    provider_repo
+        .create(CreateProviderParams {
+            id: Some("prov-own"),
+            user_id: USER,
+            platform: "openai",
+            name: "Own",
+            base_url: "https://example.invalid",
+            api_key_encrypted: "enc",
+            visibility: "private",
+            models: r#"["model-a"]"#,
+            enabled: true,
+            capabilities: "[]",
+            context_limit: None,
+            model_protocols: None,
+            model_enabled: None,
+            model_health: None,
+            model_settings: "{}",
+            bedrock_config: None,
+            is_full_url: false,
+        })
+        .await
+        .unwrap();
+    // Shared row from ANOTHER user offering model-b.
+    provider_repo
+        .create(CreateProviderParams {
+            id: Some("prov-shared"),
+            user_id: OTHER,
+            platform: "openai",
+            name: "Shared",
+            base_url: "https://example.invalid",
+            api_key_encrypted: "enc",
+            visibility: "shared",
+            models: r#"["model-b"]"#,
+            enabled: true,
+            capabilities: "[]",
+            context_limit: None,
+            model_protocols: None,
+            model_enabled: None,
+            model_health: None,
+            model_settings: "{}",
+            bedrock_config: None,
+            is_full_url: false,
+        })
+        .await
+        .unwrap();
+    let settings_repo = Arc::new(SqliteGlobalSettingsRepository::new(pool.clone()));
+    settings_repo
+        .upsert(&GlobalSettings {
+            shared_key_service_enabled: true,
+            shared_pool_daily_request_cap: 0,
+        })
+        .await
+        .unwrap();
+    svc.with_provider_repo(Arc::new(SqliteProviderRepository::new(pool.clone())));
+    svc.with_global_settings_repo(settings_repo.clone());
+    std::mem::forget(db);
+    insert_caller(
+        &repo,
+        "caller-shared",
+        "acp",
+        json!({ "workspace": ensure_test_workspace_path(), "backend": "claude" }),
+        None,
+    )
+    .await;
+
+    // Service on: the shared row resolves (own provider does not offer it).
+    let created = svc
+        .create_for_conversation_helper(USER, "caller-shared", &create_req("rs", None, Some("asst-rs")))
+        .await
+        .unwrap();
+    let row = repo.get(USER, &created.id).await.unwrap().unwrap();
+    let model: ProviderWithModel = serde_json::from_str(row.model.as_deref().unwrap()).unwrap();
+    assert_eq!(model.provider_id, "prov-shared", "shared fallback resolves while enabled");
+
+    // Service off: the same request no longer resolves.
+    settings_repo
+        .upsert(&GlobalSettings {
+            shared_key_service_enabled: false,
+            shared_pool_daily_request_cap: 0,
+        })
+        .await
+        .unwrap();
+    insert_caller(
+        &repo,
+        "caller-shared-2",
+        "acp",
+        json!({ "workspace": ensure_test_workspace_path(), "backend": "claude" }),
+        None,
+    )
+    .await;
+    let result = svc
+        .create_for_conversation_helper(USER, "caller-shared-2", &create_req("rs", None, Some("asst-rs")))
+        .await;
+    assert_code(result, ConversationToolErrorCode::AssistantModelUnresolved, 422);
+}
+
+/// Own enabled provider wins over a shared row offering the same model.
+#[tokio::test]
+async fn aionrs_model_match_prefers_own_provider_over_shared() {
+    let (svc, _broadcaster, repo, definition_repo, _overlay_repo, _preference_repo) =
+        make_service_with_mock_task_manager_and_assistant_support(Arc::new(MockTaskManager::new())).await;
+    upsert_assistant_with_fixed_model(&definition_repo, "def-rs", "asst-rs", "632f31d2", Some("model-b")).await;
+
+    let db = init_database_memory().await.unwrap();
+    let pool = db.pool().clone();
+    const OTHER: &str = "other_owner_2";
+    seed_test_user(&pool, USER).await;
+    seed_test_user(&pool, OTHER).await;
+    let provider_repo = SqliteProviderRepository::new(pool.clone());
+    // Shared row created FIRST must still lose to the own row.
+    for (id, owner, visibility, models) in [
+        ("prov-shared-first", OTHER, "shared", r#"["model-b"]"#),
+        ("prov-own-second", USER, "private", r#"["model-b"]"#),
+    ] {
+        provider_repo
+            .create(CreateProviderParams {
+                id: Some(id),
+                user_id: owner,
+                platform: "openai",
+                name: id,
+                base_url: "https://example.invalid",
+                api_key_encrypted: "enc",
+                visibility,
+                models,
+                enabled: true,
+                capabilities: "[]",
+                context_limit: None,
+                model_protocols: None,
+                model_enabled: None,
+                model_health: None,
+                model_settings: "{}",
+                bedrock_config: None,
+                is_full_url: false,
+            })
+            .await
+            .unwrap();
+    }
+    let settings_repo = Arc::new(SqliteGlobalSettingsRepository::new(pool.clone()));
+    settings_repo
+        .upsert(&GlobalSettings {
+            shared_key_service_enabled: true,
+            shared_pool_daily_request_cap: 0,
+        })
+        .await
+        .unwrap();
+    svc.with_provider_repo(Arc::new(SqliteProviderRepository::new(pool.clone())));
+    svc.with_global_settings_repo(settings_repo);
+    std::mem::forget(db);
+    insert_caller(
+        &repo,
+        "caller-own-first",
+        "acp",
+        json!({ "workspace": ensure_test_workspace_path(), "backend": "claude" }),
+        None,
+    )
+    .await;
+
+    let created = svc
+        .create_for_conversation_helper(USER, "caller-own-first", &create_req("rs", None, Some("asst-rs")))
+        .await
+        .unwrap();
+    let row = repo.get(USER, &created.id).await.unwrap().unwrap();
+    let model: ProviderWithModel = serde_json::from_str(row.model.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        model.provider_id, "prov-own-second",
+        "own row wins even though the shared row was created first"
+    );
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@ use aionui_api_types::{
 };
 use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id};
 use aionui_db::models::{AgentMetadataRow, TeamRow};
-use aionui_db::{IAgentMetadataRepository, IProviderRepository, ITeamRepository, UpdateTeamParams};
+use aionui_db::{IAgentMetadataRepository, IGlobalSettingsRepository, IProviderRepository, ITeamRepository, UpdateTeamParams};
 use async_trait::async_trait;
 use tracing::{info, warn};
 
@@ -26,6 +26,9 @@ pub struct TeamAgentProvisioner {
     agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
     assistant_catalog: Arc<dyn TeamAssistantCatalogPort>,
     provider_repo: Arc<dyn IProviderRepository>,
+    /// Shared-pool settings. When wired and the shared-key service is on,
+    /// provider resolution also falls back to shared-pool rows (own first).
+    global_settings: Option<Arc<dyn IGlobalSettingsRepository>>,
     conversation_port: Arc<dyn TeamConversationProvisioningPort>,
     capability_port: Arc<dyn TeamToolCapabilityPort>,
 }
@@ -215,6 +218,7 @@ impl TeamAgentProvisioner {
         agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
         assistant_catalog: Arc<dyn TeamAssistantCatalogPort>,
         provider_repo: Arc<dyn IProviderRepository>,
+        global_settings: Option<Arc<dyn IGlobalSettingsRepository>>,
         conversation_port: Arc<dyn TeamConversationProvisioningPort>,
         capability_port: Arc<dyn TeamToolCapabilityPort>,
     ) -> Self {
@@ -223,6 +227,7 @@ impl TeamAgentProvisioner {
             agent_metadata_repo,
             assistant_catalog,
             provider_repo,
+            global_settings,
             conversation_port,
             capability_port,
         }
@@ -932,7 +937,17 @@ impl TeamAgentProvisioner {
     }
 
     async fn resolve_provider_for_model(&self, user_id: &str, model: &str) -> Option<String> {
-        let providers = self.provider_repo.list(user_id).await.ok()?;
+        // Own enabled providers first, then shared-pool rows (list_effective
+        // ordering) while the shared-key service is enabled.
+        let include_shared = match self.global_settings.as_ref() {
+            Some(settings) => settings
+                .get()
+                .await
+                .map(|value| value.shared_key_service_enabled)
+                .unwrap_or(false),
+            None => false,
+        };
+        let providers = self.provider_repo.list_effective(user_id, include_shared).await.ok()?;
         for provider in providers {
             if !provider.enabled {
                 continue;
@@ -1362,6 +1377,12 @@ mod tests {
         async fn find_by_id(&self, _user_id: &str, _id: &str) -> Result<Option<Provider>, DbError> {
             Ok(None)
         }
+        async fn list_effective(&self, _user_id: &str, _include_shared: bool) -> Result<Vec<Provider>, DbError> {
+            Ok(Vec::new())
+        }
+        async fn find_by_id_global(&self, _id: &str) -> Result<Option<Provider>, DbError> {
+            Ok(None)
+        }
         async fn create(&self, _params: CreateProviderParams<'_>) -> Result<Provider, DbError> {
             Err(DbError::Init("unused".into()))
         }
@@ -1415,6 +1436,7 @@ mod tests {
             Arc::new(UnusedAgentMetadataRepo),
             Arc::new(EmptyTeamAssistantCatalog),
             Arc::new(EmptyProviderRepo),
+            None,
             Arc::new(RecordingProvisioningPort {
                 events,
                 patches,

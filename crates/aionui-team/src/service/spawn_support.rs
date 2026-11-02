@@ -637,6 +637,14 @@ mod tests {
             Ok(None)
         }
 
+        async fn list_effective(&self, _user_id: &str, _include_shared: bool) -> Result<Vec<Provider>, DbError> {
+            Ok(self.rows.clone())
+        }
+
+        async fn find_by_id_global(&self, _id: &str) -> Result<Option<Provider>, DbError> {
+            Ok(None)
+        }
+
         async fn create(&self, _params: aionui_db::CreateProviderParams<'_>) -> Result<Provider, DbError> {
             Err(DbError::NotFound("not implemented".into()))
         }
@@ -663,6 +671,7 @@ mod tests {
             name: id.into(),
             base_url: "https://example.com".into(),
             api_key_encrypted: String::new(),
+            visibility: "private".into(),
             models: serde_json::to_string(models).unwrap(),
             enabled: true,
             capabilities: "[]".into(),

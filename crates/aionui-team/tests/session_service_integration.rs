@@ -1693,6 +1693,12 @@ impl IProviderRepository for EmptyProviderRepo {
     async fn find_by_id(&self, _user_id: &str, _id: &str) -> Result<Option<aionui_db::models::Provider>, DbError> {
         Ok(None)
     }
+    async fn list_effective(&self, _user_id: &str, _include_shared: bool) -> Result<Vec<aionui_db::models::Provider>, DbError> {
+        Ok(vec![])
+    }
+    async fn find_by_id_global(&self, _id: &str) -> Result<Option<aionui_db::models::Provider>, DbError> {
+        Ok(None)
+ }
     async fn create(
         &self,
         _params: aionui_db::CreateProviderParams<'_>,

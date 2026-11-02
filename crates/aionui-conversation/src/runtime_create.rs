@@ -458,7 +458,10 @@ impl ConversationService {
 
     /// First ENABLED provider whose `models` JSON array lists `model_id` — the
     /// same rule as team provisioning's `resolve_provider_for_model` and the
-    /// picker's `modelList[0]` default. `None` when no provider matches.
+    /// picker's `modelList[0]` default. Own rows win over shared-pool rows
+    /// (ordering comes from `list_effective`); shared rows are considered only
+    /// while the shared-key service is enabled. `None` when no provider
+    /// matches.
     async fn match_provider_for_model(
         &self,
         user_id: &str,
@@ -469,8 +472,16 @@ impl ConversationService {
                 reason: "provider repository is not configured".to_owned(),
             });
         };
+        let include_shared = match self.global_settings_repo() {
+            Some(settings_repo) => settings_repo
+                .get()
+                .await
+                .map(|settings| settings.shared_key_service_enabled)
+                .unwrap_or(false),
+            None => false,
+        };
         let providers = provider_repo
-            .list(user_id)
+            .list_effective(user_id, include_shared)
             .await
             .map_err(ConversationCreateError::transport)?;
         Ok(providers

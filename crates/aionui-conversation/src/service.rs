@@ -39,8 +39,8 @@ use aionui_db::models::{
 use aionui_db::{
     AgentBindingResolution, ConversationFilters, ConversationRowUpdate, CreateAcpSessionParams, IAcpSessionRepository,
     IAgentMetadataRepository, IAssistantDefinitionRepository, IAssistantOverlayRepository,
-    IAssistantPreferenceRepository, IConversationRepository, IMcpServerRepository, IProviderRepository,
-    MessagePageCursor, MessagePageDirection, MessagePageParams, SaveRuntimeStateParams,
+    IAssistantPreferenceRepository, IConversationRepository, IGlobalSettingsRepository, IMcpServerRepository,
+    IProviderRepository, MessagePageCursor, MessagePageDirection, MessagePageParams, SaveRuntimeStateParams,
     UpsertConversationAssistantSnapshotParams, resolve_agent_binding_from_rows,
 };
 use aionui_extension::AssistantRuleDispatcher;
@@ -332,6 +332,9 @@ pub struct ConversationService {
     /// Only the agent-facing `conversation create` path reads this, to match an
     /// aionrs assistant's default model to one of the user's providers.
     provider_repo: Arc<RwLock<Option<Arc<dyn IProviderRepository>>>>,
+    /// Shared-pool settings. When wired and the shared-key service is on,
+    /// provider-to-model matching also considers shared-pool rows (own first).
+    global_settings_repo: Arc<RwLock<Option<Arc<dyn IGlobalSettingsRepository>>>>,
     assistant_dispatcher: Arc<RwLock<Option<Arc<dyn AssistantRuleDispatcher>>>>,
     agent_availability_feedback: Arc<RwLock<Option<Arc<dyn AgentAvailabilityFeedbackPort>>>>,
     /// Project-bind side branch (optional). `None` → binding is a no-op, so
@@ -418,6 +421,7 @@ impl ConversationService {
             assistant_state_repo: Arc::new(RwLock::new(None)),
             assistant_preference_repo: Arc::new(RwLock::new(None)),
             provider_repo: Arc::new(RwLock::new(None)),
+            global_settings_repo: Arc::new(RwLock::new(None)),
             assistant_dispatcher: Arc::new(RwLock::new(None)),
             agent_availability_feedback: Arc::new(RwLock::new(None)),
             project_service: Arc::new(RwLock::new(None)),
@@ -615,6 +619,16 @@ impl ConversationService {
         if let Ok(mut guard) = self.provider_repo.write() {
             *guard = Some(repo);
         }
+    }
+
+    pub fn with_global_settings_repo(&self, repo: Arc<dyn IGlobalSettingsRepository>) {
+        if let Ok(mut guard) = self.global_settings_repo.write() {
+            *guard = Some(repo);
+        }
+    }
+
+    pub(crate) fn global_settings_repo(&self) -> Option<Arc<dyn IGlobalSettingsRepository>> {
+        self.global_settings_repo.read().ok().and_then(|guard| guard.as_ref().cloned())
     }
 
     pub fn with_assistant_dispatcher(&self, dispatcher: Arc<dyn AssistantRuleDispatcher>) {
