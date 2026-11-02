@@ -712,7 +712,10 @@ async fn admin_creates_shared_provider_and_member_sees_it_when_enabled() {
     let mut body = sample_create_body();
     body["id"] = json!("pool-prov-1");
     body["visibility"] = json!("shared");
-    let resp = app1.oneshot(admin_json_request("POST", "/api/providers", body)).await.unwrap();
+    let resp = app1
+        .oneshot(admin_json_request("POST", "/api/providers", body))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
     assert_eq!(body_json(resp).await["data"]["visibility"], "shared");
 
@@ -749,7 +752,10 @@ async fn member_cannot_modify_shared_provider_over_http() {
     let mut body = sample_create_body();
     body["id"] = json!("pool-prov-2");
     body["visibility"] = json!("shared");
-    let resp = app1.oneshot(admin_json_request("POST", "/api/providers", body)).await.unwrap();
+    let resp = app1
+        .oneshot(admin_json_request("POST", "/api/providers", body))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
     // Member PUT on the shared row → 403.

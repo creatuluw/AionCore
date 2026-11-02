@@ -132,8 +132,9 @@ pub async fn resolve_provider_for_use(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_db::{CreateProviderParams, SqliteProviderRepository, SqliteUsageCounterRepository, init_database_memory};
-    use std::time::Duration;
+    use aionui_db::{
+        CreateProviderParams, SqliteProviderRepository, SqliteUsageCounterRepository, init_database_memory,
+    };
 
     const OWNER: &str = "system_default_user";
     const MEMBER: &str = "member_b";
@@ -210,9 +211,14 @@ mod tests {
         let pool = db().await;
         create_provider(&pool, "prov-own", OWNER, "shared", true).await;
         let m = meter(&pool, true, 0).await;
-        let row = resolve_provider_for_use(&SqliteProviderRepository::new(pool.clone()), Some(&m), OWNER, "prov-own")
-            .await
-            .unwrap();
+        let row = resolve_provider_for_use(
+            &SqliteProviderRepository::new(pool.clone()),
+            Some(&m),
+            OWNER,
+            "prov-own",
+        )
+        .await
+        .unwrap();
         assert_eq!(row.user_id, OWNER);
         // No counter row may exist for the owner.
         assert_eq!(usage_count(&pool, OWNER, "prov-own").await, 0);
@@ -226,7 +232,9 @@ mod tests {
         let repo = SqliteProviderRepository::new(pool.clone());
 
         for expected in [1_i64, 2, 3] {
-            resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap();
+            resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+                .await
+                .unwrap();
             assert_eq!(usage_count(&pool, MEMBER, "prov-pool").await, expected);
         }
     }
@@ -238,9 +246,15 @@ mod tests {
         let m = meter(&pool, true, 2).await;
         let repo = SqliteProviderRepository::new(pool.clone());
 
-        resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap();
-        resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap();
-        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap_err();
+        resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+            .await
+            .unwrap();
+        resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+            .await
+            .unwrap();
+        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::PoolQuotaExceeded));
     }
 
@@ -251,7 +265,9 @@ mod tests {
         let m = meter(&pool, true, 0).await;
         let repo = SqliteProviderRepository::new(pool.clone());
         for _ in 0..25 {
-            resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap();
+            resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+                .await
+                .unwrap();
         }
     }
 
@@ -261,7 +277,9 @@ mod tests {
         create_provider(&pool, "prov-private", OWNER, "private", true).await;
         let m = meter(&pool, true, 0).await;
         let repo = SqliteProviderRepository::new(pool.clone());
-        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-private").await.unwrap_err();
+        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-private")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::NotFound(_)));
     }
 
@@ -271,7 +289,9 @@ mod tests {
         create_provider(&pool, "prov-pool", OWNER, "shared", true).await;
         let m = meter(&pool, false, 0).await;
         let repo = SqliteProviderRepository::new(pool.clone());
-        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool").await.unwrap_err();
+        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-pool")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::NotFound(_)));
     }
 
@@ -281,7 +301,9 @@ mod tests {
         create_provider(&pool, "prov-off", OWNER, "shared", false).await;
         let m = meter(&pool, true, 0).await;
         let repo = SqliteProviderRepository::new(pool.clone());
-        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-off").await.unwrap_err();
+        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "prov-off")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::NotFound(_)));
     }
 
@@ -290,7 +312,9 @@ mod tests {
         let pool = db().await;
         create_provider(&pool, "prov-pool", OWNER, "shared", true).await;
         let repo = SqliteProviderRepository::new(pool.clone());
-        let err = resolve_provider_for_use(&repo, None, MEMBER, "prov-pool").await.unwrap_err();
+        let err = resolve_provider_for_use(&repo, None, MEMBER, "prov-pool")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::NotFound(_)));
     }
 
@@ -299,7 +323,9 @@ mod tests {
         let pool = db().await;
         let m = meter(&pool, true, 0).await;
         let repo = SqliteProviderRepository::new(pool.clone());
-        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "no-such").await.unwrap_err();
+        let err = resolve_provider_for_use(&repo, Some(&m), MEMBER, "no-such")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AgentError::NotFound(_)));
     }
 }

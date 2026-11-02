@@ -7,7 +7,9 @@ use aionui_api_types::{
 };
 use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id};
 use aionui_db::models::{AgentMetadataRow, TeamRow};
-use aionui_db::{IAgentMetadataRepository, IGlobalSettingsRepository, IProviderRepository, ITeamRepository, UpdateTeamParams};
+use aionui_db::{
+    IAgentMetadataRepository, IGlobalSettingsRepository, IProviderRepository, ITeamRepository, UpdateTeamParams,
+};
 use async_trait::async_trait;
 use tracing::{info, warn};
 

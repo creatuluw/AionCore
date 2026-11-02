@@ -566,7 +566,7 @@ mod tests {
             platform: "openai".into(),
             name: "n".into(),
             base_url: "https://api.openai.com".into(),
-            masked_key: mask_api_key("sk-secret-xyz-long").into(),
+            masked_key: mask_api_key("sk-secret-xyz-long"),
             has_key: true,
             visibility: "shared".into(),
             owned: false,

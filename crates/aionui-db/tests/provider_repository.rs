@@ -24,6 +24,7 @@ fn sample_params() -> CreateProviderParams<'static> {
         name: "Anthropic",
         base_url: "https://api.anthropic.com",
         api_key_encrypted: "enc_key_data",
+        visibility: "private",
         models: r#"["claude-sonnet-4-20250514"]"#,
         enabled: true,
         capabilities: r#"[{"type":"text"}]"#,

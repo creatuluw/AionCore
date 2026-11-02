@@ -6,6 +6,7 @@ use axum::extract::{Extension, Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 
+use aionui_api_types::UserRole;
 use aionui_api_types::{
     ApiResponse, ClientPreferencesResponse, CreateProviderRequest, CurrentUserResponse, DetectProtocolRequest,
     EnsureNodeRuntimeRequest, EnsureNodeRuntimeResponse, FeedbackDiagnosticsQuery, FeedbackDiagnosticsResponse,
@@ -13,7 +14,6 @@ use aionui_api_types::{
     SystemInfoResponse, SystemSettingsResponse, UpdateCheckRequest, UpdateCheckResult, UpdateClientPreferencesRequest,
     UpdateProviderRequest, UpdateSettingsRequest,
 };
-use aionui_api_types::UserRole;
 use aionui_auth::CurrentUser;
 use aionui_common::ApiError;
 

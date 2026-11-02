@@ -628,7 +628,10 @@ impl ConversationService {
     }
 
     pub(crate) fn global_settings_repo(&self) -> Option<Arc<dyn IGlobalSettingsRepository>> {
-        self.global_settings_repo.read().ok().and_then(|guard| guard.as_ref().cloned())
+        self.global_settings_repo
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
     }
 
     pub fn with_assistant_dispatcher(&self, dispatcher: Arc<dyn AssistantRuleDispatcher>) {

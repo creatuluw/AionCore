@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aionui_api_types::{mask_api_key, CreateProviderRequest, ProviderResponse, UpdateProviderRequest};
+use aionui_api_types::{CreateProviderRequest, ProviderResponse, UpdateProviderRequest, mask_api_key};
 use aionui_common::{decrypt_string, encrypt_string};
-use aionui_db::{CreateProviderParams, GlobalSettings, IGlobalSettingsRepository, IProviderRepository, UpdateProviderParams,
-    models::Provider, models::ProviderVisibility};
+use aionui_db::{
+    CreateProviderParams, GlobalSettings, IGlobalSettingsRepository, IProviderRepository, UpdateProviderParams,
+    models::Provider, models::ProviderVisibility,
+};
 use serde::de::DeserializeOwned;
 
 use crate::error::SystemError;
@@ -50,7 +52,10 @@ impl ProviderService {
     /// shared-key service is enabled.
     pub async fn list(&self, user_id: &str) -> Result<Vec<ProviderResponse>, SystemError> {
         let settings = self.settings().await?;
-        let rows = self.repo.list_effective(user_id, settings.shared_key_service_enabled).await?;
+        let rows = self
+            .repo
+            .list_effective(user_id, settings.shared_key_service_enabled)
+            .await?;
         rows.into_iter().map(|row| self.row_to_response(row, user_id)).collect()
     }
 
@@ -176,12 +181,7 @@ impl ProviderService {
     /// Load the provider row for a modifying request, enforcing the owner-or-
     /// admin rule: a row that does not exist is 404; a row the requester does
     /// not own is 403 unless the requester is an admin.
-    async fn require_accessible_row(
-        &self,
-        user_id: &str,
-        is_admin: bool,
-        id: &str,
-    ) -> Result<Provider, SystemError> {
+    async fn require_accessible_row(&self, user_id: &str, is_admin: bool, id: &str) -> Result<Provider, SystemError> {
         let row = self
             .repo
             .find_by_id_global(id)
@@ -191,7 +191,9 @@ impl ProviderService {
             // Members may never modify rows they do not own — including
             // shared-pool rows. 403 (not 404) so legitimate clients can tell
             // a permission problem from a deleted provider.
-            return Err(SystemError::Forbidden("Only the provider owner or an admin may modify this provider".into()));
+            return Err(SystemError::Forbidden(
+                "Only the provider owner or an admin may modify this provider".into(),
+            ));
         }
         Ok(row)
     }
@@ -266,10 +268,13 @@ fn resolve_requested_visibility(requested: Option<&str>, is_admin: bool) -> Resu
     let Some(requested) = requested.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(ProviderVisibility::Private);
     };
-    let visibility = ProviderVisibility::parse(requested)
-        .ok_or_else(|| SystemError::BadRequest(format!("visibility must be 'private' or 'shared', got '{requested}'")))?;
+    let visibility = ProviderVisibility::parse(requested).ok_or_else(|| {
+        SystemError::BadRequest(format!("visibility must be 'private' or 'shared', got '{requested}'"))
+    })?;
     if visibility == ProviderVisibility::Shared && !is_admin {
-        return Err(SystemError::Forbidden("Only admins may share a provider into the shared key pool".into()));
+        return Err(SystemError::Forbidden(
+            "Only admins may share a provider into the shared key pool".into(),
+        ));
     }
     Ok(visibility)
 }
@@ -911,7 +916,9 @@ mod tests {
     #[tokio::test]
     async fn member_cannot_modify_or_delete_a_shared_row_they_do_not_own() {
         let (svc, _settings) = setup_pool(true, 0).await;
-        svc.create(TEST_USER_ID, true, shared_create_request("prov-pool")).await.unwrap();
+        svc.create(TEST_USER_ID, true, shared_create_request("prov-pool"))
+            .await
+            .unwrap();
 
         let err = svc
             .update(

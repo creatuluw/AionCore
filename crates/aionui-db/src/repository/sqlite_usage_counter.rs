@@ -22,30 +22,30 @@ impl IUsageCounterRepository for SqliteUsageCounterRepository {
         // UPDATE and the RETURNING of the post-write value are atomic within
         // one SQLite write transaction, so two concurrent requesters each get
         // a distinct count (the fair-use cap can never be raced past).
-        let count: i64 =
-            sqlx::query_scalar(
-                "INSERT INTO usage_counters (user_id, provider_id, day, requests) VALUES (?, ?, ?, 1) \
+        let count: i64 = sqlx::query_scalar(
+            "INSERT INTO usage_counters (user_id, provider_id, day, requests) VALUES (?, ?, ?, 1) \
                  ON CONFLICT(user_id, provider_id, day) DO UPDATE SET requests = requests + 1 \
                  RETURNING requests",
-            )
-            .bind(user_id)
-            .bind(provider_id)
-            .bind(day)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(DbError::Query)?;
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(day)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(DbError::Query)?;
 
         Ok(count)
     }
 
     async fn get(&self, user_id: &str, provider_id: &str, day: &str) -> Result<i64, DbError> {
-        let count: Option<i64> = sqlx::query_scalar("SELECT requests FROM usage_counters WHERE user_id = ? AND provider_id = ? AND day = ?")
-            .bind(user_id)
-            .bind(provider_id)
-            .bind(day)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(DbError::Query)?;
+        let count: Option<i64> =
+            sqlx::query_scalar("SELECT requests FROM usage_counters WHERE user_id = ? AND provider_id = ? AND day = ?")
+                .bind(user_id)
+                .bind(provider_id)
+                .bind(day)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(DbError::Query)?;
 
         Ok(count.unwrap_or(0))
     }

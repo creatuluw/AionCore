@@ -20,8 +20,8 @@ pub mod manager;
 /// shape the `SessionBackend` stack carries in `SessionConfig.init.mcp_servers`.
 pub mod mcp_resolve;
 pub mod media;
-pub mod pool_metering;
 pub(crate) mod persistence;
+pub mod pool_metering;
 pub mod protocol;
 pub mod registry;
 pub mod routes;

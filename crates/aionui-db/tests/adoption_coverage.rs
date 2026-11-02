@@ -35,6 +35,16 @@ const GLOBAL_TABLES: &[(&str, &str)] = &[
     // Canonical filesystem-path registry shared by all users by design
     // (project-bind: folders are reused globally by resource_canonical).
     ("folders", "global canonical path registry"),
+    // Shared-key-pool settings singleton (id = 1): deployment-wide toggle and
+    // cap. No per-user rows exist; adoption must not touch it.
+    ("global_settings", "singleton deployment-wide shared-pool settings"),
+    // Admin-issued registration invite codes. `created_by`/`used_by` are audit
+    // references to admin/member users, not ownership roots — there is no
+    // user-owned payload to re-own, and codes must stay valid across adoption.
+    (
+        "invite_codes",
+        "admin-issued invite codes; audit refs, no owned payload",
+    ),
 ];
 
 /// Tables whose `user_id` column is NOT a Core-user ownership column — it

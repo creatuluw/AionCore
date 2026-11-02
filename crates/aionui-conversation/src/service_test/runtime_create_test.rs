@@ -277,8 +277,8 @@ async fn a_relative_workspace_is_rejected_locally_and_a_missing_absolute_one_by_
 // ── Assistant override branch ────────────────────────────────────────
 
 use aionui_db::{
-    CreateProviderParams, GlobalSettings, IGlobalSettingsRepository, IProviderRepository, SqliteGlobalSettingsRepository,
-    SqliteProviderRepository, UpsertAssistantOverlayParams,
+    CreateProviderParams, GlobalSettings, IGlobalSettingsRepository, IProviderRepository,
+    SqliteGlobalSettingsRepository, SqliteProviderRepository, UpsertAssistantOverlayParams,
 };
 
 /// An assistant whose default model is FIXED to `model`, bound to `agent_id`.
@@ -522,7 +522,10 @@ async fn aionrs_model_match_falls_back_to_shared_providers_only_while_enabled() 
         .unwrap();
     let row = repo.get(USER, &created.id).await.unwrap().unwrap();
     let model: ProviderWithModel = serde_json::from_str(row.model.as_deref().unwrap()).unwrap();
-    assert_eq!(model.provider_id, "prov-shared", "shared fallback resolves while enabled");
+    assert_eq!(
+        model.provider_id, "prov-shared",
+        "shared fallback resolves while enabled"
+    );
 
     // Service off: the same request no longer resolves.
     settings_repo
