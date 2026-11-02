@@ -33,6 +33,15 @@ impl UserRole {
             Self::Member => "member",
         }
     }
+
+    /// Parses the column/CLI wire form (`"admin"` / `"member"`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "admin" => Some(Self::Admin),
+            "member" => Some(Self::Member),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
