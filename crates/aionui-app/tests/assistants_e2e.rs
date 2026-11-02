@@ -301,6 +301,7 @@ async fn fixture() -> Fixture {
             name: "Test OpenAI",
             base_url: "https://example.invalid",
             api_key_encrypted: "stub",
+            visibility: "private",
             models: "[]",
             enabled: true,
             capabilities: "[]",

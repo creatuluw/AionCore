@@ -339,6 +339,7 @@ async fn provider_repo_with(models_by_provider: &[(&str, &str, bool)]) -> Arc<dy
             name: id,
             base_url: "https://example.invalid",
             api_key_encrypted: "enc",
+            visibility: "private",
             models,
             enabled: *enabled,
             capabilities: "[]",

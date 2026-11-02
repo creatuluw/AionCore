@@ -173,6 +173,7 @@ mod tests {
                 name: "Test",
                 base_url,
                 api_key_encrypted: &encrypted,
+                visibility: "private",
                 models: "[]",
                 enabled: true,
                 capabilities: "[]",

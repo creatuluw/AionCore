@@ -49,6 +49,7 @@ async fn insert_test_provider(repo: &dyn IProviderRepository, id: &str, platform
         name: "Test Provider",
         base_url: "https://api.example.com/v1",
         api_key_encrypted: &encrypted_api_key,
+        visibility: "private",
         models: r#"["gpt-4o","gpt-5.4"]"#,
         enabled: true,
         capabilities: "[]",

@@ -40,7 +40,7 @@ pub use mcp_server::McpServerRow;
 pub use message::MessageRow;
 pub use oauth_token::OAuthTokenRow;
 pub use project::{FolderRow, ProjectExplorerRow, ProjectKind, ProjectRow, Role};
-pub use provider::Provider;
+pub use provider::{Provider, ProviderVisibility};
 pub use remote_agent::RemoteAgentRow;
 pub use skill::{SkillImportRecordRow, SkillRow};
 pub use system_settings::SystemSettings;

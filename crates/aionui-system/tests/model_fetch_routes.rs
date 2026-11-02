@@ -75,6 +75,7 @@ async fn create_provider(db: &aionui_db::Database, platform: &str, base_url: &st
             name: "Test Provider",
             base_url,
             api_key_encrypted: &encrypted,
+            visibility: "private",
             models: "[]",
             enabled: true,
             capabilities: "[]",

@@ -10,8 +10,21 @@ pub trait IProviderRepository: Send + Sync {
     /// Returns all providers, ordered by creation time ascending.
     async fn list(&self, user_id: &str) -> Result<Vec<Provider>, DbError>;
 
+    /// Returns the providers the user effectively sees: their own rows first
+    /// (creation order), followed by shared-pool rows when `include_shared` is
+    /// true. Shared rows from OTHER users are excluded while `include_shared`
+    /// is false (the shared-key service toggle is off).
+    async fn list_effective(&self, user_id: &str, include_shared: bool) -> Result<Vec<Provider>, DbError>;
+
     /// Finds a provider by ID, or `None` if not found.
     async fn find_by_id(&self, user_id: &str, id: &str) -> Result<Option<Provider>, DbError>;
+
+    /// Finds a provider by ID regardless of owner, or `None` if not found.
+    ///
+    /// Existence lookup only — callers MUST enforce visibility/authorization
+    /// (owner check, `visibility`, shared-key service toggle) before using or
+    /// exposing the row.
+    async fn find_by_id_global(&self, id: &str) -> Result<Option<Provider>, DbError>;
 
     /// Creates a new provider and returns the inserted row.
     async fn create(&self, params: CreateProviderParams<'_>) -> Result<Provider, DbError>;
@@ -33,6 +46,8 @@ pub struct CreateProviderParams<'a> {
     pub name: &'a str,
     pub base_url: &'a str,
     pub api_key_encrypted: &'a str,
+    /// Pool visibility as the column wire form (`"private"` / `"shared"`).
+    pub visibility: &'a str,
     pub models: &'a str,
     pub enabled: bool,
     pub capabilities: &'a str,
@@ -54,6 +69,8 @@ pub struct UpdateProviderParams<'a> {
     pub name: Option<&'a str>,
     pub base_url: Option<&'a str>,
     pub api_key_encrypted: Option<&'a str>,
+    /// Pool visibility as the column wire form (`"private"` / `"shared"`).
+    pub visibility: Option<&'a str>,
     pub models: Option<&'a str>,
     pub enabled: Option<bool>,
     pub capabilities: Option<&'a str>,

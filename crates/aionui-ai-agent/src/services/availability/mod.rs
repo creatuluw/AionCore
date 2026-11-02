@@ -428,6 +428,7 @@ mod tests {
             name: "OpenAI",
             base_url: "https://api.openai.com",
             api_key_encrypted: "enc",
+            visibility: "private",
             models: r#"["gpt-4"]"#,
             enabled: true,
             capabilities: r#"[{"type":"text"}]"#,

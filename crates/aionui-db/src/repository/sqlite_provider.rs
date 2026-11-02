@@ -28,9 +28,38 @@ impl IProviderRepository for SqliteProviderRepository {
         Ok(rows)
     }
 
+    async fn list_effective(&self, user_id: &str, include_shared: bool) -> Result<Vec<Provider>, DbError> {
+        // Own rows first, then shared rows from other users (when included);
+        // each group keeps creation order. The ordering is part of the model
+        // matching contract: a user's own enabled provider wins over a shared
+        // one offering the same model.
+        let rows = sqlx::query_as::<_, Provider>(
+            "SELECT * FROM providers \
+             WHERE user_id = ? OR (? AND visibility = 'shared' AND user_id != ?) \
+             ORDER BY (user_id = ?) DESC, created_at ASC",
+        )
+        .bind(user_id)
+        .bind(include_shared)
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     async fn find_by_id(&self, user_id: &str, id: &str) -> Result<Option<Provider>, DbError> {
         let row = sqlx::query_as::<_, Provider>("SELECT * FROM providers WHERE user_id = ? AND id = ?")
             .bind(user_id)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row)
+    }
+
+    async fn find_by_id_global(&self, id: &str) -> Result<Option<Provider>, DbError> {
+        let row = sqlx::query_as::<_, Provider>("SELECT * FROM providers WHERE id = ?")
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -47,10 +76,10 @@ impl IProviderRepository for SqliteProviderRepository {
 
         sqlx::query(
             "INSERT INTO providers \
-                (id, user_id, platform, name, base_url, api_key_encrypted, models, enabled, \
+                (id, user_id, platform, name, base_url, api_key_encrypted, visibility, models, enabled, \
                  capabilities, context_limit, model_protocols, model_enabled, \
                  model_health, model_settings, bedrock_config, is_full_url, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(params.user_id)
@@ -58,6 +87,7 @@ impl IProviderRepository for SqliteProviderRepository {
         .bind(params.name)
         .bind(params.base_url)
         .bind(params.api_key_encrypted)
+        .bind(params.visibility)
         .bind(params.models)
         .bind(params.enabled)
         .bind(params.capabilities)
@@ -86,6 +116,7 @@ impl IProviderRepository for SqliteProviderRepository {
             name: params.name.to_string(),
             base_url: params.base_url.to_string(),
             api_key_encrypted: params.api_key_encrypted.to_string(),
+            visibility: params.visibility.to_string(),
             models: params.models.to_string(),
             enabled: params.enabled,
             capabilities: params.capabilities.to_string(),
@@ -111,7 +142,7 @@ impl IProviderRepository for SqliteProviderRepository {
 
         sqlx::query(
             "UPDATE providers SET \
-                platform = ?, name = ?, base_url = ?, api_key_encrypted = ?, \
+                platform = ?, name = ?, base_url = ?, api_key_encrypted = ?, visibility = ?, \
                 models = ?, enabled = ?, capabilities = ?, context_limit = ?, \
                 model_protocols = ?, model_enabled = ?, model_health = ?, \
                 model_settings = ?, bedrock_config = ?, is_full_url = ?, updated_at = ? \
@@ -121,6 +152,7 @@ impl IProviderRepository for SqliteProviderRepository {
         .bind(&merged.name)
         .bind(&merged.base_url)
         .bind(&merged.api_key_encrypted)
+        .bind(&merged.visibility)
         .bind(&merged.models)
         .bind(merged.enabled)
         .bind(&merged.capabilities)
@@ -173,6 +205,7 @@ fn merge_update(existing: Provider, params: UpdateProviderParams<'_>) -> Provide
             .api_key_encrypted
             .unwrap_or(&existing.api_key_encrypted)
             .to_string(),
+        visibility: params.visibility.unwrap_or(&existing.visibility).to_string(),
         models: params.models.unwrap_or(&existing.models).to_string(),
         enabled: params.enabled.unwrap_or(existing.enabled),
         capabilities: params.capabilities.unwrap_or(&existing.capabilities).to_string(),
@@ -227,6 +260,7 @@ mod tests {
             name: "Anthropic",
             base_url: "https://api.anthropic.com",
             api_key_encrypted: "encrypted_key_data",
+            visibility: "private",
             models: r#"["claude-sonnet-4-20250514"]"#,
             enabled: true,
             capabilities: r#"[{"type":"text"}]"#,
@@ -506,5 +540,110 @@ mod tests {
         repo.delete(USER_B, &provider_b.id).await.unwrap();
         assert_eq!(repo.list(USER_A).await.unwrap().len(), 1);
         assert!(repo.list(USER_B).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_effective_excludes_other_users_shared_rows_when_disabled() {
+        let (repo, _db) = setup().await;
+        let own = repo.create(sample_params()).await.unwrap();
+        let shared = repo
+            .create(CreateProviderParams {
+                id: Some("shared-pool-1"),
+                user_id: USER_B,
+                visibility: "shared",
+                ..sample_params()
+            })
+            .await
+            .unwrap();
+
+        // Toggle off: only own rows.
+        let rows = repo.list_effective(USER_A, false).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, own.id);
+
+        // Toggle on: own first, then the other user's shared row.
+        let rows = repo.list_effective(USER_A, true).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, own.id);
+        assert_eq!(rows[1].id, shared.id);
+
+        // The shared row's owner keeps seeing it as their own (only) row.
+        let rows = repo.list_effective(USER_B, false).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, shared.id);
+    }
+
+    #[tokio::test]
+    async fn list_effective_excludes_other_users_private_rows_even_when_enabled() {
+        let (repo, _db) = setup().await;
+        repo.create(CreateProviderParams {
+            id: Some("private-b"),
+            user_id: USER_B,
+            ..sample_params()
+        })
+        .await
+        .unwrap();
+
+        let rows = repo.list_effective(USER_A, true).await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_effective_orders_own_rows_before_shared() {
+        let (repo, _db) = setup().await;
+        // Shared row created FIRST.
+        repo.create(CreateProviderParams {
+            id: Some("shared-first"),
+            user_id: USER_B,
+            visibility: "shared",
+            ..sample_params()
+        })
+        .await
+        .unwrap();
+        // Own row created SECOND must still sort first.
+        let own = repo.create(sample_params()).await.unwrap();
+
+        let rows = repo.list_effective(USER_A, true).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, own.id);
+        assert_eq!(rows[1].id, "shared-first");
+    }
+
+    #[tokio::test]
+    async fn find_by_id_global_ignores_owner() {
+        let (repo, _db) = setup().await;
+        let created = repo.create(sample_params()).await.unwrap();
+
+        // The owner-scoped lookup from another user misses…
+        assert!(repo.find_by_id(USER_B, &created.id).await.unwrap().is_none());
+        // …while the global lookup finds the row regardless of owner.
+        let found = repo.find_by_id_global(&created.id).await.unwrap().unwrap();
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.visibility, "private");
+        assert!(repo.find_by_id_global("no_such_id").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn visibility_round_trips_and_defaults_to_private() {
+        let (repo, _db) = setup().await;
+        let created = repo.create(sample_params()).await.unwrap();
+        assert_eq!(created.visibility, "private");
+
+        let updated = repo
+            .update(
+                USER_A,
+                &created.id,
+                UpdateProviderParams {
+                    visibility: Some("shared"),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.visibility, "shared");
+
+        // Visibility persists through a fresh read.
+        let found = repo.find_by_id_global(&created.id).await.unwrap().unwrap();
+        assert_eq!(found.visibility, "shared");
     }
 }
