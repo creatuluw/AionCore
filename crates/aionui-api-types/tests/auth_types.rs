@@ -2,7 +2,7 @@
 
 use aionui_api_types::{
     AuthStatusResponse, ChangePasswordRequest, LoginRequest, LoginResponse, PublicUser, QrLoginRequest,
-    RefreshTokenRequest,
+    RefreshTokenRequest, UserRole,
 };
 
 // --- LoginRequest ---
@@ -48,6 +48,7 @@ fn login_response_serialization_matches_spec() {
         PublicUser {
             id: "auth_1712345678_abc".into(),
             username: "admin".into(),
+            role: UserRole::Admin,
         },
         "eyJhbGciOiJIUzI1NiJ9".into(),
     );
@@ -112,6 +113,7 @@ fn auth_status_response_needs_setup() {
         needs_setup: true,
         user_count: 0,
         is_authenticated: false,
+        role: None,
     };
     let json = serde_json::to_value(&resp).unwrap();
 
@@ -128,6 +130,7 @@ fn auth_status_response_authenticated() {
         needs_setup: false,
         user_count: 2,
         is_authenticated: true,
+        role: Some(UserRole::Member),
     };
     let json = serde_json::to_value(&resp).unwrap();
 
@@ -143,6 +146,7 @@ fn auth_status_response_uses_snake_case_keys() {
         needs_setup: false,
         user_count: 1,
         is_authenticated: true,
+        role: Some(UserRole::Member),
     };
     let json = serde_json::to_value(&resp).unwrap();
     let obj = json.as_object().unwrap();
@@ -162,6 +166,7 @@ fn auth_status_response_round_trip() {
         needs_setup: true,
         user_count: 5,
         is_authenticated: false,
+        role: None,
     };
     let serialized = serde_json::to_string(&original).unwrap();
     let deserialized: AuthStatusResponse = serde_json::from_str(&serialized).unwrap();

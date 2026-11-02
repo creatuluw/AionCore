@@ -1,5 +1,25 @@
 use serde::{Deserialize, Serialize};
 
+/// Account privilege level.
+///
+/// Mirrors `aionui_db::UserRole` (this crate must not depend on the database
+/// layer, so the API contract re-declares the wire value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    Admin,
+    Member,
+}
+
+impl UserRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        }
+    }
+}
+
 /// Public user info returned in API responses.
 ///
 /// Contains only the fields safe to expose to clients.
@@ -7,6 +27,8 @@ use serde::{Deserialize, Serialize};
 pub struct PublicUser {
     pub id: String,
     pub username: String,
+    /// Account privilege level.
+    pub role: UserRole,
 }
 
 /// Login request body for `POST /login`.
@@ -56,6 +78,10 @@ pub struct AuthStatusResponse {
     pub needs_setup: bool,
     pub user_count: u64,
     pub is_authenticated: bool,
+    /// Role of the authenticated user; absent when the request carries no
+    /// valid access token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<UserRole>,
 }
 
 /// Refresh token request body for `POST /api/auth/refresh`.
@@ -204,6 +230,44 @@ pub struct WebuiGenerateQrTokenResponse {
     pub expires_at_ms: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Invite-code registration
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /api/auth/register`.
+///
+/// Registration requires a valid invite code issued by an admin.
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub code: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// Response for `POST /api/auth/register`.
+///
+/// Mirrors the login response shape: the session token is returned in the
+/// body AND set as the `aionui-session` cookie, so browsers and native
+/// clients both work.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    pub success: bool,
+    pub message: String,
+    pub user: PublicUser,
+    pub token: String,
+}
+
+impl RegisterResponse {
+    pub fn new(user: PublicUser, token: String) -> Self {
+        Self {
+            success: true,
+            message: "Registration successful".to_owned(),
+            user,
+            token,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,10 +278,12 @@ mod tests {
         let user = PublicUser {
             id: "auth_1712345678_abc".into(),
             username: "admin".into(),
+            role: UserRole::Admin,
         };
         let json = serde_json::to_value(&user).unwrap();
         assert_eq!(json["id"], "auth_1712345678_abc");
         assert_eq!(json["username"], "admin");
+        assert_eq!(json["role"], "admin");
     }
 
     #[test]
@@ -240,6 +306,7 @@ mod tests {
         let user = PublicUser {
             id: "user_1".into(),
             username: "admin".into(),
+            role: UserRole::Member,
         };
         let resp = LoginResponse::new(user.clone(), "jwt_token".into());
         assert!(resp.success);
@@ -254,6 +321,7 @@ mod tests {
             PublicUser {
                 id: "auth_123".into(),
                 username: "admin".into(),
+                role: UserRole::Admin,
             },
             "eyJhbGciOi".into(),
         );
@@ -350,12 +418,14 @@ mod tests {
             needs_setup: true,
             user_count: 0,
             is_authenticated: false,
+            role: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["success"], true);
         assert_eq!(json["needs_setup"], true);
         assert_eq!(json["user_count"], 0);
         assert_eq!(json["is_authenticated"], false);
+        assert_eq!(json.get("role"), None);
         // Verify snake_case keys exist, not camelCase
         assert!(json.get("needsSetup").is_none());
         assert!(json.get("userCount").is_none());

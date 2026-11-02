@@ -3,6 +3,7 @@
 //! All HTTP request/response DTOs shared across the API surface.
 mod acp;
 mod acp_prompt_hook;
+mod admin;
 mod agent_build_extra;
 mod agent_discovery;
 mod agent_error;
@@ -48,6 +49,10 @@ pub use acp::{
     TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
 pub use acp_prompt_hook::AcpPromptHookWarningPayload;
+pub use admin::{
+    AdminCreateUserRequest, AdminInviteResponse, AdminSetPasswordRequest, AdminUserMutationResponse, AdminUserResponse,
+    CreateInviteRequest, CreateInviteResponse, PoolSettingsResponse, SetRoleRequest, UpdatePoolSettingsRequest,
+};
 pub use agent_build_extra::{
     AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, ForkSpec, SessionMcpServer, SessionMcpTransport,
     SlashCommandCompletionBehavior, SlashCommandItem,
@@ -78,9 +83,10 @@ pub use assistant::{
 pub use auth::{
     AuthStatusResponse, ChangePasswordRequest, EnsureExternalSessionRequest, EnsureExternalSessionResponse,
     EnsureExternalUserRequest, EnsureExternalUserResponse, ExternalUserType, InternalAuthErrorCode, LoginRequest,
-    LoginResponse, PublicUser, QrLoginRequest, RefreshResponse, RefreshTokenRequest, RevokeExternalSessionRequest,
-    RevokeExternalSessionResponse, UserInfoResponse, WebuiChangePasswordRequest, WebuiChangeUsernameRequest,
-    WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse, WebuiResetPasswordResponse, WsTokenResponse,
+    LoginResponse, PublicUser, QrLoginRequest, RefreshResponse, RefreshTokenRequest, RegisterRequest, RegisterResponse,
+    RevokeExternalSessionRequest, RevokeExternalSessionResponse, UserInfoResponse, UserRole,
+    WebuiChangePasswordRequest, WebuiChangeUsernameRequest, WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse,
+    WebuiResetPasswordResponse, WsTokenResponse,
 };
 pub use channel::{
     ApprovePairingRequest, BridgeResponse, ChannelAssistantSettingRequest, ChannelAssistantSettingResponse,
