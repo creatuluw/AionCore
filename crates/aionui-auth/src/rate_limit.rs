@@ -44,14 +44,18 @@ impl RateLimiter {
         Self::new(5, Duration::from_secs(15 * 60))
     }
 
-    /// API rate limiter: 60 requests per 1-minute window.
+    /// API rate limiter: 120 requests per 1-minute window per IP.
+    /// (Hosted multi-user: admin console mounts + SWR polling fan out several
+    /// calls at once; the desktop-era default of 60 throttled real usage.)
     pub fn api() -> Self {
-        Self::new(60, Duration::from_secs(60))
+        Self::new(120, Duration::from_secs(60))
     }
 
-    /// Authenticated action limiter: 20 requests per 1-minute window.
+    /// Authenticated action limiter: 60 requests per 1-minute window per user.
+    /// (Hosted multi-user: raised from the desktop-era default of 20 — the
+    /// admin console's users/invites/settings loads tripped it on mount.)
     pub fn authenticated_action() -> Self {
-        Self::new(20, Duration::from_secs(60))
+        Self::new(60, Duration::from_secs(60))
     }
 
     /// Check if the key is rate limited without modifying state.
