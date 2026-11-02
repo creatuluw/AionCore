@@ -21,8 +21,8 @@ use aionui_db::{
     IProviderRepository, SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository,
     SqliteAssistantOverlayRepository, SqliteAssistantOverrideRepository, SqliteAssistantPreferenceRepository,
     SqliteAssistantRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
-    SqliteFeedbackDiagnosticsRepository, SqliteProviderRepository, SqliteRemoteAgentRepository,
-    SqliteSettingsRepository,
+    SqliteFeedbackDiagnosticsRepository, SqliteGlobalSettingsRepository, SqliteProviderRepository,
+    SqliteRemoteAgentRepository, SqliteSettingsRepository,
 };
 use aionui_extension::{
     AssistantRuleDispatcher, ExtensionRegistry, ExtensionRouterState, ExtensionStateStore, ExternalPathsManager,
@@ -492,7 +492,8 @@ pub fn build_system_state(services: &AppServices) -> SystemRouterState {
     SystemRouterState {
         settings_service: SettingsService::new(Arc::new(SqliteSettingsRepository::new(pool.clone()))),
         client_pref_service,
-        provider_service: ProviderService::new(provider_repo.clone(), encryption_key),
+        provider_service: ProviderService::new(provider_repo.clone(), encryption_key)
+            .with_global_settings(Arc::new(SqliteGlobalSettingsRepository::new(pool.clone()))),
         model_fetch_service: ModelFetchService::new(provider_repo, encryption_key, http_client.clone()),
         protocol_detection_service: ProtocolDetectionService::new(http_client.clone()),
         version_check_service: VersionCheckService::new(http_client, env!("CARGO_PKG_VERSION").to_owned()),

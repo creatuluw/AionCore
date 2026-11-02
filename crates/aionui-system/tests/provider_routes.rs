@@ -15,8 +15,8 @@ use tower::ServiceExt;
 
 use aionui_auth::CurrentUser;
 use aionui_db::{
-    SqliteClientPreferenceRepository, SqliteFeedbackDiagnosticsRepository, SqliteProviderRepository,
-    SqliteSettingsRepository, UserStatus, UserType, init_database_memory,
+    SqliteClientPreferenceRepository, SqliteFeedbackDiagnosticsRepository, SqliteGlobalSettingsRepository,
+    SqliteProviderRepository, SqliteSettingsRepository, UserStatus, UserType, init_database_memory,
 };
 use aionui_system::{
     ClientPrefService, FeedbackDiagnosticsService, ModelFetchService, ProtocolDetectionService, ProviderService,
@@ -37,7 +37,8 @@ fn build_state(db: &aionui_db::Database) -> SystemRouterState {
     SystemRouterState {
         settings_service: SettingsService::new(Arc::new(SqliteSettingsRepository::new(db.pool().clone()))),
         client_pref_service: ClientPrefService::new(Arc::new(SqliteClientPreferenceRepository::new(db.pool().clone()))),
-        provider_service: ProviderService::new(provider_repo.clone(), TEST_ENCRYPTION_KEY),
+        provider_service: ProviderService::new(provider_repo.clone(), TEST_ENCRYPTION_KEY)
+            .with_global_settings(Arc::new(SqliteGlobalSettingsRepository::new(db.pool().clone()))),
         model_fetch_service: ModelFetchService::new(provider_repo, TEST_ENCRYPTION_KEY, http_client.clone()),
         protocol_detection_service: ProtocolDetectionService::new(http_client.clone()),
         version_check_service: VersionCheckService::new(http_client, "0.1.0".to_owned()),
@@ -88,6 +89,16 @@ fn get_request_for_user(user_id: &str, uri: &str) -> Request<Body> {
 
 fn json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
     json_request_for_user(TEST_USER_ID, method, uri, body)
+}
+
+/// Request as the bootstrap admin (role admin) — exercises the admin path of
+/// the shared-pool visibility rules.
+fn admin_json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+    let mut req = json_request_for_user(TEST_USER_ID, method, uri, body);
+    if let Some(user) = req.extensions_mut().get_mut::<CurrentUser>() {
+        user.role = aionui_api_types::UserRole::Admin;
+    }
+    req
 }
 
 fn json_request_for_user(user_id: &str, method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
@@ -165,7 +176,7 @@ async fn list_providers_empty() {
 }
 
 #[tokio::test]
-async fn list_providers_returns_plaintext_api_key() {
+async fn list_providers_masks_the_api_key() {
     let (_app, db) = setup().await;
     create_one(&db).await;
 
@@ -177,10 +188,14 @@ async fn list_providers_returns_plaintext_api_key() {
     let providers = json["data"].as_array().unwrap();
     assert_eq!(providers.len(), 1);
 
-    let api_key = providers[0]["api_key"].as_str().unwrap();
-    // Pre-launch: api_key is returned plaintext on the wire (encrypted at rest).
-    assert_eq!(api_key, "sk-ant-api03-test1234");
-    assert!(!api_key.contains("***"));
+    // Masked hint on the wire, never the plaintext key.
+    assert_eq!(providers[0]["masked_key"], "sk-...1234");
+    assert_eq!(providers[0]["has_key"], true);
+    assert_eq!(providers[0]["visibility"], "private");
+    assert_eq!(providers[0]["owned"], true);
+    let raw = serde_json::to_string(&json).unwrap();
+    assert!(!raw.contains("sk-ant-api03-test1234"));
+    assert!(!raw.contains("api_key"));
 }
 
 // ===========================================================================
@@ -204,7 +219,8 @@ async fn create_provider_success() {
     assert_eq!(data["platform"], "anthropic");
     assert_eq!(data["name"], "Anthropic");
     assert_eq!(data["base_url"], "https://api.anthropic.com");
-    assert_eq!(data["api_key"], "sk-ant-api03-test1234");
+    assert_eq!(data["masked_key"], "sk-...1234");
+    assert_eq!(data["has_key"], true);
     assert!(data["enabled"].as_bool().unwrap());
     assert!(data["models"].as_array().unwrap().is_empty());
     assert!(data["created_at"].as_i64().unwrap() > 0);
@@ -228,7 +244,9 @@ async fn create_provider_with_supplied_id() {
     let json = body_json(resp).await;
     let data = &json["data"];
     assert_eq!(data["id"], "caller-id-123");
-    assert_eq!(data["api_key"], "sk-test");
+    // "sk-test" is short (<= 8 chars): the mask reveals nothing.
+    assert_eq!(data["masked_key"], "***");
+    assert_eq!(data["has_key"], true);
     assert_eq!(data["model_enabled"]["gpt-4"], true);
     assert_eq!(data["model_enabled"]["gpt-3.5"], false);
 }
@@ -463,7 +481,7 @@ async fn update_provider_name() {
 }
 
 #[tokio::test]
-async fn update_provider_api_key_returns_plaintext() {
+async fn update_provider_api_key_masks_the_new_key() {
     let (_app, db) = setup().await;
     let (_, id) = create_one(&db).await;
 
@@ -479,8 +497,11 @@ async fn update_provider_api_key_returns_plaintext() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    let api_key = json["data"]["api_key"].as_str().unwrap();
-    assert_eq!(api_key, "new-key-abcdefgh");
+    // Mask reflects the NEW key (proof the stored ciphertext changed).
+    assert_eq!(json["data"]["masked_key"], "new...efgh");
+    assert_eq!(json["data"]["has_key"], true);
+    let raw = serde_json::to_string(&json).unwrap();
+    assert!(!raw.contains("new-key-abcdefgh"));
 }
 
 #[tokio::test]
@@ -525,10 +546,12 @@ async fn update_provider_nonexistent() {
 }
 
 #[tokio::test]
-async fn cross_user_provider_update_delete_are_not_found() {
+async fn cross_user_provider_update_delete_are_forbidden() {
     let (_app, db) = setup().await;
     let (_, id) = create_one(&db).await;
 
+    // Cross-user modification is a permission problem (the row exists but is
+    // not the requester's) — 403, not 404.
     let update_app = system_routes(build_state(&db));
     let resp = update_app
         .oneshot(json_request_for_user(
@@ -539,14 +562,14 @@ async fn cross_user_provider_update_delete_are_not_found() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     let delete_app = system_routes(build_state(&db));
     let resp = delete_app
         .oneshot(delete_request_for_user(OTHER_USER_ID, &format!("/api/providers/{id}")))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     let owner_app = system_routes(build_state(&db));
     let resp = owner_app.oneshot(get_request("/api/providers")).await.unwrap();
@@ -652,4 +675,135 @@ async fn full_crud_flow() {
     let resp = app6.oneshot(get_request("/api/providers")).await.unwrap();
     let list_json = body_json(resp).await;
     assert_eq!(list_json["data"], json!([]));
+}
+
+// ===========================================================================
+// Shared key pool — visibility rules over HTTP
+// ===========================================================================
+
+/// Seed the shared-pool toggle directly in the database (no admin settings
+/// route needed for these tests).
+async fn set_shared_pool_enabled(db: &aionui_db::Database, enabled: bool) {
+    sqlx::query("UPDATE global_settings SET shared_key_service_enabled = ? WHERE id = 1")
+        .bind(enabled)
+        .execute(db.pool())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn member_cannot_create_shared_provider_over_http() {
+    let (app, _db) = setup().await;
+    let mut body = sample_create_body();
+    body["visibility"] = json!("shared");
+
+    let resp = app.oneshot(json_request("POST", "/api/providers", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let json = body_json(resp).await;
+    assert_eq!(json["code"], "FORBIDDEN");
+}
+
+#[tokio::test]
+async fn admin_creates_shared_provider_and_member_sees_it_when_enabled() {
+    let (_app, db) = setup().await;
+    set_shared_pool_enabled(&db, true).await;
+
+    let app1 = system_routes(build_state(&db));
+    let mut body = sample_create_body();
+    body["id"] = json!("pool-prov-1");
+    body["visibility"] = json!("shared");
+    let resp = app1.oneshot(admin_json_request("POST", "/api/providers", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(body_json(resp).await["data"]["visibility"], "shared");
+
+    // Member lists it: visible, not owned, key masked.
+    let app2 = system_routes(build_state(&db));
+    let resp = app2
+        .oneshot(get_request_for_user(OTHER_USER_ID, "/api/providers"))
+        .await
+        .unwrap();
+    let json = body_json(resp).await;
+    let providers = json["data"].as_array().unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["id"], "pool-prov-1");
+    assert_eq!(providers[0]["visibility"], "shared");
+    assert_eq!(providers[0]["owned"], false);
+    assert_eq!(providers[0]["masked_key"], "sk-...1234");
+
+    // Toggle off: the member no longer sees the shared row.
+    set_shared_pool_enabled(&db, false).await;
+    let app3 = system_routes(build_state(&db));
+    let resp = app3
+        .oneshot(get_request_for_user(OTHER_USER_ID, "/api/providers"))
+        .await
+        .unwrap();
+    assert_eq!(body_json(resp).await["data"], json!([]));
+}
+
+#[tokio::test]
+async fn member_cannot_modify_shared_provider_over_http() {
+    let (_app, db) = setup().await;
+    set_shared_pool_enabled(&db, true).await;
+
+    let app1 = system_routes(build_state(&db));
+    let mut body = sample_create_body();
+    body["id"] = json!("pool-prov-2");
+    body["visibility"] = json!("shared");
+    let resp = app1.oneshot(admin_json_request("POST", "/api/providers", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Member PUT on the shared row → 403.
+    let app2 = system_routes(build_state(&db));
+    let resp = app2
+        .oneshot(json_request_for_user(
+            OTHER_USER_ID,
+            "PUT",
+            "/api/providers/pool-prov-2",
+            json!({"name": "hijacked"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Member DELETE on the shared row → 403.
+    let app3 = system_routes(build_state(&db));
+    let resp = app3
+        .oneshot(delete_request_for_user(OTHER_USER_ID, "/api/providers/pool-prov-2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn private_provider_is_invisible_to_other_members() {
+    let (_app, db) = setup().await;
+    let (_, id) = create_one(&db).await;
+
+    // Member B's list does not include A's private row…
+    let app2 = system_routes(build_state(&db));
+    let resp = app2
+        .oneshot(get_request_for_user(OTHER_USER_ID, "/api/providers"))
+        .await
+        .unwrap();
+    assert_eq!(body_json(resp).await["data"], json!([]));
+
+    // …and B cannot modify or delete it.
+    let app3 = system_routes(build_state(&db));
+    let resp = app3
+        .oneshot(json_request_for_user(
+            OTHER_USER_ID,
+            "PUT",
+            &format!("/api/providers/{id}"),
+            json!({"name": "hijacked"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let app4 = system_routes(build_state(&db));
+    let resp = app4
+        .oneshot(delete_request_for_user(OTHER_USER_ID, &format!("/api/providers/{id}")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

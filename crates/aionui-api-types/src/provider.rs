@@ -144,17 +144,24 @@ pub struct BedrockConfig {
 
 /// Provider response for `GET /api/providers` and single-provider endpoints.
 ///
-/// The `api_key` field is returned in plaintext (decrypted on read). Storage
-/// remains encrypted at rest. Pre-launch convention for the frontend
-/// local-store → backend migration; no masking applied.
+/// The API key is NEVER returned on the wire — only a `masked_key` hint
+/// (first 3 + `...` + last 4 characters for long keys, `***` otherwise) plus
+/// `has_key` so the UI can show whether a credential is configured. Storage
+/// remains encrypted at rest. See [`mask_api_key`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderResponse {
     pub id: String,
     pub platform: String,
     pub name: String,
     pub base_url: String,
-    /// Plaintext API key (decrypted from storage).
-    pub api_key: String,
+    /// Masked key hint for display (never usable as a credential).
+    pub masked_key: String,
+    /// Whether a usable API key is configured for this provider.
+    pub has_key: bool,
+    /// Pool visibility: `"private"` or `"shared"`.
+    pub visibility: String,
+    /// Whether the requesting user owns this provider row.
+    pub owned: bool,
     pub models: Vec<String>,
     pub enabled: bool,
     pub capabilities: Vec<ModelCapability>,
@@ -176,6 +183,22 @@ pub struct ProviderResponse {
     pub updated_at: i64,
 }
 
+/// Mask an API key for display: keep the first 3 and last 4 characters when
+/// the key is long enough to be informative (len > 8), otherwise reveal
+/// nothing. Empty input maps to an empty mask (no key configured).
+pub fn mask_api_key(key: &str) -> String {
+    let char_count = key.chars().count();
+    if char_count == 0 {
+        return String::new();
+    }
+    if char_count <= 8 {
+        return "***".to_owned();
+    }
+    let first: String = key.chars().take(3).collect();
+    let last: String = key.chars().skip(char_count - 4).collect();
+    format!("{first}...{last}")
+}
+
 /// Request body for `POST /api/providers`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateProviderRequest {
@@ -189,6 +212,11 @@ pub struct CreateProviderRequest {
     pub base_url: String,
     /// Plain-text API key (supports comma/newline-separated multi-keys).
     pub api_key: String,
+    /// Requested pool visibility. `None` (or absent) means `private`.
+    /// Only admins may create a `"shared"` provider; members requesting
+    /// shared receive 403.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
     #[serde(default)]
     pub models: Vec<String>,
     #[serde(default = "default_true")]
@@ -224,6 +252,9 @@ pub struct UpdateProviderRequest {
     pub name: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    /// Requested pool visibility change (`"private"` / `"shared"`). Only
+    /// admins may set `"shared"`.
+    pub visibility: Option<String>,
     pub models: Option<Vec<String>>,
     pub enabled: Option<bool>,
     pub capabilities: Option<Vec<ModelCapability>>,
@@ -491,7 +522,10 @@ mod tests {
             platform: "anthropic".into(),
             name: "Anthropic".into(),
             base_url: "https://api.anthropic.com".into(),
-            api_key: "sk-ant-api03-plaintext".into(),
+            masked_key: "sk-...1234".into(),
+            has_key: true,
+            visibility: "private".into(),
+            owned: true,
             models: vec!["claude-sonnet-4-20250514".into()],
             enabled: true,
             capabilities: vec![ModelCapability {
@@ -511,7 +545,10 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["id"], "uuid-xxx");
         assert_eq!(json["platform"], "anthropic");
-        assert_eq!(json["api_key"], "sk-ant-api03-plaintext");
+        assert_eq!(json["masked_key"], "sk-...1234");
+        assert_eq!(json["has_key"], true);
+        assert_eq!(json["visibility"], "private");
+        assert_eq!(json["owned"], true);
         assert_eq!(json["base_url"], "https://api.anthropic.com");
         assert_eq!(json["models"][0], "claude-sonnet-4-20250514");
         assert_eq!(json["model_enabled"]["claude-sonnet-4-20250514"], true);
@@ -521,14 +558,18 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_response_api_key_plaintext() {
-        // Pre-launch: no masking is applied to the api_key field on the wire.
+    fn test_provider_response_api_key_never_serialized_and_mask_is_correct() {
+        // The api_key field is gone from the wire contract: serialized JSON
+        // must contain no plaintext key, only the masked hint.
         let resp = ProviderResponse {
             id: "id".into(),
             platform: "openai".into(),
             name: "n".into(),
             base_url: "https://api.openai.com".into(),
-            api_key: "sk-secret-xyz".into(),
+            masked_key: mask_api_key("sk-secret-xyz-long").into(),
+            has_key: true,
+            visibility: "shared".into(),
+            owned: false,
             models: vec![],
             enabled: true,
             capabilities: vec![],
@@ -543,8 +584,29 @@ mod tests {
             updated_at: 0,
         };
         let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["api_key"], "sk-secret-xyz");
-        assert!(!json["api_key"].as_str().unwrap().contains("***"));
+        let serialized = serde_json::to_string(&resp).unwrap();
+        // No plaintext key material anywhere on the wire — not under api_key,
+        // not under any other field name.
+        assert!(json.get("api_key").is_none());
+        assert!(!serialized.contains("sk-secret-xyz-long"));
+        assert!(!serialized.contains("api_key"));
+        // Mask keeps the documented first-3/last-4 shape.
+        assert_eq!(json["masked_key"], "sk-...long");
+        assert_eq!(json["has_key"], true);
+        assert_eq!(json["owned"], false);
+    }
+
+    #[test]
+    fn test_mask_api_key_shapes() {
+        // Long keys keep first 3 + ... + last 4.
+        assert_eq!(mask_api_key("sk-ant-api03-abcdef123456"), "sk-...3456");
+        assert_eq!(mask_api_key("sk-secret-xyz-long"), "sk-...long");
+        // Nine chars is the smallest "long" key.
+        assert_eq!(mask_api_key("123456789"), "123...6789");
+        // Short keys and the boundary reveal nothing.
+        assert_eq!(mask_api_key("12345678"), "***");
+        assert_eq!(mask_api_key("abc"), "***");
+        assert_eq!(mask_api_key(""), "");
     }
 
     // -- CreateProviderRequest --
@@ -562,11 +624,25 @@ mod tests {
         assert_eq!(req.name, "Anthropic");
         assert_eq!(req.base_url, "https://api.anthropic.com");
         assert_eq!(req.api_key, "sk-ant-api03-test");
+        assert!(req.visibility.is_none());
         assert!(req.models.is_empty());
         assert!(req.enabled);
         assert!(req.capabilities.is_empty());
         assert!(req.context_limit.is_none());
         assert!(req.bedrock_config.is_none());
+    }
+
+    #[test]
+    fn test_create_provider_request_visibility_deserializes() {
+        let raw = json!({
+            "platform": "anthropic",
+            "name": "Anthropic",
+            "base_url": "https://api.anthropic.com",
+            "api_key": "sk-ant-api03-test",
+            "visibility": "shared"
+        });
+        let req: CreateProviderRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(req.visibility.as_deref(), Some("shared"));
     }
 
     #[test]
@@ -651,6 +727,7 @@ mod tests {
             name: "OpenAI".into(),
             base_url: "https://api.openai.com".into(),
             api_key: "sk-test".into(),
+            visibility: None,
             models: vec![],
             enabled: true,
             capabilities: vec![],

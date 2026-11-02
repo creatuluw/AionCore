@@ -13,6 +13,9 @@ pub enum SystemError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 

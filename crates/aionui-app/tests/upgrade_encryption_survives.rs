@@ -164,5 +164,5 @@ async fn assert_provider_decrypts(services: &AppServices) {
         .iter()
         .find(|p| p.id == "upgrade-prov-1")
         .expect("provider present");
-    assert_eq!(p.api_key, "sk-upgrade-SECRET", "decryption must survive");
+    assert_eq!(p.masked_key, "sk-...CRET", "decryption must survive");
 }

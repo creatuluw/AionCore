@@ -20,8 +20,8 @@ async fn open_old_db_and_decrypt_provider() {
     let list = svc.list("system_default_user").await.expect("list must not fail");
     let p = list.iter().find(|p| p.id == "repro-prov-1").expect("provider present");
     assert_eq!(
-        p.api_key, "sk-repro-XYZ-123",
-        "REPRO: pre-upgrade credential must decrypt (empty means key rotated)"
+        p.masked_key, "sk-...-123",
+        "REPRO: pre-upgrade credential must decrypt (empty mask means key rotated)"
     );
     eprintln!("[cur] DECRYPTION OK");
     services.database.close().await;

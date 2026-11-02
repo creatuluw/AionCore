@@ -13,6 +13,7 @@ use aionui_api_types::{
     SystemInfoResponse, SystemSettingsResponse, UpdateCheckRequest, UpdateCheckResult, UpdateClientPreferencesRequest,
     UpdateProviderRequest, UpdateSettingsRequest,
 };
+use aionui_api_types::UserRole;
 use aionui_auth::CurrentUser;
 use aionui_common::ApiError;
 
@@ -45,6 +46,7 @@ impl From<SystemError> for ApiError {
             SystemError::NotFound(reason) => ApiError::NotFound(reason),
             SystemError::BadRequest(reason) => ApiError::BadRequest(reason),
             SystemError::Conflict(reason) => ApiError::Conflict(reason),
+            SystemError::Forbidden(reason) => ApiError::Forbidden(reason),
             SystemError::Internal(reason) => ApiError::Internal(reason),
             SystemError::BadGateway(reason) => ApiError::BadGateway(reason),
             SystemError::Timeout(reason) => ApiError::Timeout(reason),
@@ -210,7 +212,7 @@ async fn create_provider(
     let Json(req) = body.map_err(ApiError::from)?;
     let provider = state
         .provider_service
-        .create(&user.id, req)
+        .create(&user.id, user.role == UserRole::Admin, req)
         .await
         .map_err(ApiError::from)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(provider))))
@@ -225,7 +227,7 @@ async fn update_provider(
     let Json(req) = body.map_err(ApiError::from)?;
     let provider = state
         .provider_service
-        .update(&user.id, &id, req)
+        .update(&user.id, user.role == UserRole::Admin, &id, req)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(ApiResponse::ok(provider)))
@@ -238,7 +240,7 @@ async fn delete_provider(
 ) -> Result<Json<ApiResponse<()>>, ApiError> {
     state
         .provider_service
-        .delete(&user.id, &id)
+        .delete(&user.id, user.role == UserRole::Admin, &id)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(ApiResponse::success()))
