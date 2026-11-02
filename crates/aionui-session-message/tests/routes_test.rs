@@ -250,6 +250,7 @@ fn user_router(ctx: &Ctx) -> Router {
             username: USER.to_owned(),
             user_type: aionui_db::UserType::Local,
             status: aionui_db::UserStatus::Active,
+            role: aionui_api_types::UserRole::Member,
         },
     ))
 }

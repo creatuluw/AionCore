@@ -16,7 +16,10 @@ use aionui_auth::{
     AuthIdentityMode, AuthRouterState, CookieConfig, JwtService, QrTokenStore, RefreshCoalescer, SessionRevokedHook,
     auth_routes, hash_password,
 };
-use aionui_db::{IUserRepository, SqliteUserRepository, UserStatus, init_database_memory};
+use aionui_db::{
+    IInviteCodeRepository, IUserRepository, SqliteInviteCodeRepository, SqliteUserRepository, UserStatus,
+    init_database_memory,
+};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -43,6 +46,7 @@ async fn test_app_with_options_and_hook(
 ) -> (Router, TestContext) {
     let db = init_database_memory().await.unwrap();
     let user_repo = Arc::new(SqliteUserRepository::new(db.pool().clone())) as Arc<dyn IUserRepository>;
+    let invite_repo = Arc::new(SqliteInviteCodeRepository::new(db.pool().clone())) as Arc<dyn IInviteCodeRepository>;
     let jwt_service = Arc::new(JwtService::new("test_secret_for_routes".into()));
     let cookie_config = Arc::new(CookieConfig {
         secure: false,
@@ -54,6 +58,7 @@ async fn test_app_with_options_and_hook(
         jwt_service: jwt_service.clone(),
         refresh_coalescer: RefreshCoalescer::new(),
         user_repo: user_repo.clone(),
+        invite_repo,
         fs_adopter: None,
         cookie_config,
         qr_token_store: qr_token_store.clone(),

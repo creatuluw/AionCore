@@ -75,6 +75,7 @@ pub struct AdminInviteResponse {
 /// `expires_in_hours` is relative to creation time; `None` means the code
 /// never expires.
 #[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateInviteRequest {
     pub expires_in_hours: Option<i64>,
 }
@@ -135,7 +136,7 @@ mod tests {
         assert!(req.shared_key_service_enabled);
         assert_eq!(req.shared_pool_daily_request_cap, 250);
 
-        let json = serde_json::to_value(&req).unwrap();
+        let json = serde_json::to_value(req).unwrap();
         assert!(json.get("sharedKeyServiceEnabled").is_some());
     }
 

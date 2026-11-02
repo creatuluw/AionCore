@@ -15,17 +15,19 @@ use serde::{Deserialize, Serialize};
 use aionui_api_types::{
     ApiResponse, AuthStatusResponse, ChangePasswordRequest, EnsureExternalSessionRequest, EnsureExternalUserRequest,
     EnsureExternalUserResponse, LoginRequest, LoginResponse, PublicUser, QrLoginRequest, RefreshResponse,
-    RefreshTokenRequest, RevokeExternalSessionRequest, RevokeExternalSessionResponse, UserInfoResponse,
-    WebuiChangePasswordRequest, WebuiChangeUsernameRequest, WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse,
-    WebuiResetPasswordResponse, WsTokenResponse,
+    RefreshTokenRequest, RegisterRequest, RegisterResponse, RevokeExternalSessionRequest,
+    RevokeExternalSessionResponse, UserInfoResponse, WebuiChangePasswordRequest, WebuiChangeUsernameRequest,
+    WebuiChangeUsernameResponse, WebuiGenerateQrTokenResponse, WebuiResetPasswordResponse, WsTokenResponse,
 };
 use aionui_common::ApiError;
 use aionui_common::constants::{COOKIE_MAX_AGE_DAYS, REFRESH_COOKIE_NAME};
-use aionui_db::{DbError, IUserRepository, UserStatus, UserType, models::User};
+use aionui_db::{DbError, IInviteCodeRepository, IUserRepository, UserStatus, UserType, models::User};
 
+use crate::account::{AccountError, PasswordOutcome, create_local_user};
 use crate::error::AuthError;
 use crate::extract::{extract_cookie_value, extract_token_from_headers};
-use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware};
+use crate::invite::{InviteError, mark_invite_used, redeem_validate};
+use crate::middleware::{AuthIdentityMode, AuthState, CurrentUser, auth_middleware, to_api_role};
 use crate::password::{dummy_password_hash, generate_password, hash_password, verify_password_timed};
 use crate::qr_token::QrTokenStore;
 use crate::rate_limit::{
@@ -82,6 +84,8 @@ pub struct AuthRouterState {
     /// Coalesces concurrent refreshes for the same token (refresh-storm guard).
     pub refresh_coalescer: RefreshCoalescer,
     pub user_repo: Arc<dyn IUserRepository>,
+    /// Invite codes: `POST /api/auth/register` validates against this store.
+    pub invite_repo: Arc<dyn IInviteCodeRepository>,
     /// Optional on-disk adoption side-effect (AionUi → AionPro upgrade).
     pub fs_adopter: Option<Arc<dyn crate::service::SystemDefaultFilesystemAdopter>>,
     pub cookie_config: Arc<CookieConfig>,
@@ -272,16 +276,20 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
         runtime_token_verifier: None,
     };
 
-    // Auth rate limited routes (login, qr-login)
+    // Auth rate limited routes (login, qr-login); register shares the same
+    // failure-counting limiter instance via `auth_limiter_register`.
     let auth_rate_limited = Router::new()
         .route("/login", post(login_handler))
         .route("/api/auth/qr-login", post(qr_login_handler))
-        .route_layer(from_fn_with_state(auth_limiter, auth_rate_limit_middleware))
+        .route_layer(from_fn_with_state(auth_limiter.clone(), auth_rate_limit_middleware))
         .with_state(state.clone());
 
-    // API rate limited public routes (no auth required)
+    // Public routes (no auth required). Registration additionally rides the
+    // failure-counting auth limiter, so brute-forcing codes trips the same
+    // 5-per-15-minutes lockout as login.
     let api_public = Router::new()
         .route("/api/auth/status", get(status_handler))
+        .route("/api/auth/register", post(register_handler))
         .route(
             "/api/auth/internal/external-users/{external_user_id}",
             put(ensure_external_user_handler),
@@ -330,6 +338,7 @@ pub fn auth_routes(state: AuthRouterState) -> Router {
         .route("/api/webui/reset-password", post(webui_reset_password_handler))
         .route("/api/webui/generate-qr-token", post(webui_generate_qr_token_handler))
         .route_layer(from_fn_with_state(api_limiter.clone(), api_rate_limit_middleware))
+        .route_layer(from_fn_with_state(auth_limiter, auth_rate_limit_middleware))
         .with_state(state.clone());
 
     // Authenticated routes: api limiter -> auth -> action limiter
@@ -513,6 +522,14 @@ async fn login_handler(
 
     let user = found_user.ok_or_else(|| ApiError::Unauthorized("Invalid username or password".into()))?;
 
+    // Disabled accounts must not be able to start new sessions. Same generic
+    // message as a wrong password so the response cannot distinguish a
+    // disabled account from an unknown one (no user enumeration).
+    if user.status != UserStatus::Active {
+        tracing::info!(user_id = %user.id, "login rejected: account disabled");
+        return Err(ApiError::Unauthorized("Invalid username or password".into()));
+    }
+
     let token = state
         .jwt_service
         .sign_with_session_generation(
@@ -541,6 +558,7 @@ async fn login_handler(
         PublicUser {
             id: user.id,
             username: user.username.unwrap_or_else(|| "external_user".to_string()),
+            role: to_api_role(user.role),
         },
         token,
     );
@@ -553,6 +571,140 @@ async fn login_handler(
         Json(resp),
     )
         .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/register
+// ---------------------------------------------------------------------------
+
+/// Public invite-gated registration.
+///
+/// Validates the invite code first (so invalid codes cannot probe username
+/// existence), then username/password per the login rules, creates a local
+/// `member` account, marks the invite used, and issues session cookies
+/// exactly like [`login_handler`].
+async fn register_handler(
+    State(state): State<AuthRouterState>,
+    body: Result<Json<RegisterRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    if state.aionpro_mode {
+        return Err(user_context_required());
+    }
+
+    let Json(req) = body.map_err(ApiError::from)?;
+
+    // 1. Validate the invite code. One error surface for every failure shape
+    //    (unknown / revoked / expired / used) so bad attempts cannot learn
+    //    the code's state. Reuses the login flow's failure-counting limiter
+    //    via the route layer.
+    let invite = redeem_validate(state.invite_repo.as_ref(), &req.code)
+        .await
+        .map_err(invite_error_to_api_error)?;
+
+    // 2. Validate credentials with the exact login-flow rules.
+    if req.username.len() > 32 {
+        return Err(ApiError::BadRequest("Username must not exceed 32 characters".into()));
+    }
+    if req.password.len() > 128 {
+        return Err(ApiError::BadRequest("Password must not exceed 128 characters".into()));
+    }
+    validate_username(&req.username)?;
+    validate_password(&req.password)?;
+
+    // 3. Create the account (local type, member role, bcrypt — the same
+    //    helper the CLI create path uses). Username conflicts race-safe.
+    let outcome = create_local_user(state.user_repo.as_ref(), &req.username, &req.password)
+        .await
+        .map_err(|e| match e {
+            AccountError::AlreadyExists(_) => ApiError::coded(
+                StatusCode::CONFLICT,
+                "USERNAME_TAKEN",
+                "A user with this username already exists.",
+                None,
+            ),
+            AccountError::InvalidUsername(msg) => ApiError::BadRequest(msg),
+            AccountError::WeakPassword(msg) => ApiError::BadRequest(msg),
+            AccountError::Hash => ApiError::Internal("Password hash error".into()),
+            AccountError::Db(e) => db_error_to_api_error(e),
+        })?;
+    let created = match &outcome {
+        PasswordOutcome::Created { id, username } => (id.clone(), username.clone()),
+        other => {
+            return Err(ApiError::Internal(format!("Unexpected account outcome: {other:?}")));
+        }
+    };
+    let user_id = created.0;
+
+    // 4. Consume the invite. The mark_used WHERE-guard makes double
+    //    redemption impossible even under concurrent registers.
+    mark_invite_used(state.invite_repo.as_ref(), &invite.id, &user_id)
+        .await
+        .map_err(invite_error_to_api_error)?;
+
+    // 5. Look the fresh row back up so the session is signed against the
+    //    persisted session_generation, then issue cookies like login.
+    let user = state
+        .user_repo
+        .find_by_id(&user_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Database error: {e}")))?
+        .ok_or_else(|| ApiError::Internal("Registered user not found".into()))?;
+
+    let token = state
+        .jwt_service
+        .sign_with_session_generation(
+            &user.id,
+            user.username.as_deref().unwrap_or("external_user"),
+            user.session_generation,
+        )
+        .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
+    let refresh_token = state
+        .jwt_service
+        .sign_refresh(
+            &user.id,
+            user.username.as_deref().unwrap_or("external_user"),
+            user.session_generation,
+        )
+        .map_err(|e| ApiError::Internal(format!("Token signing error: {e}")))?;
+
+    // Update last login (best-effort), mirroring login_handler.
+    if let Err(e) = state.user_repo.update_last_login(&user.id).await {
+        tracing::warn!("Failed to update last login for {}: {e}", user.id);
+    }
+
+    let session_cookie = state.cookie_config.build_session_cookie(&token);
+    let refresh_cookie = state.cookie_config.build_refresh_cookie(&refresh_token);
+    let resp = RegisterResponse::new(
+        PublicUser {
+            id: user.id,
+            username: user.username.unwrap_or_else(|| "external_user".to_string()),
+            role: to_api_role(user.role),
+        },
+        token,
+    );
+
+    tracing::info!(user_id = %user_id, "user registered via invite code");
+    Ok((
+        AppendHeaders([
+            (header::SET_COOKIE, session_cookie),
+            (header::SET_COOKIE, refresh_cookie),
+        ]),
+        Json(resp),
+    )
+        .into_response())
+}
+
+fn invite_error_to_api_error(err: InviteError) -> ApiError {
+    match err {
+        InviteError::NotRedeemable => ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            "INVALID_INVITE",
+            "Invite code is invalid, expired, or already used.",
+            None,
+        ),
+        InviteError::InvalidExpiry => ApiError::BadRequest("expires_in_hours must be between 1 and 8760".into()),
+        InviteError::Db(e) => db_error_to_api_error(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -603,16 +755,33 @@ async fn status_handler(
         .map_err(|e| ApiError::Internal(format!("Database error: {e}")))?;
 
     // Check authentication without requiring it. Only an access token counts as
-    // "authenticated" — a refresh token is not a request credential.
-    let is_authenticated = extract_token_from_headers(&headers)
+    // "authenticated" — a refresh token is not a request credential. When a
+    // valid token is present, also surface the user's role so the frontend
+    // can hide admin affordances without an extra round-trip.
+    let authenticated_user_id = extract_token_from_headers(&headers)
         .and_then(|token| state.jwt_service.verify_access(&token).ok())
-        .is_some();
+        .map(|payload| payload.user_id);
+
+    let (is_authenticated, role) = match authenticated_user_id {
+        Some(user_id) => {
+            let role = state
+                .user_repo
+                .find_by_id(&user_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|user| to_api_role(user.role));
+            (true, role)
+        }
+        None => (false, None),
+    };
 
     Ok(Json(AuthStatusResponse {
         success: true,
         needs_setup: !has_users,
         user_count: user_count as u64,
         is_authenticated,
+        role,
     }))
 }
 
@@ -756,6 +925,7 @@ async fn user_handler(Extension(user): Extension<CurrentUser>) -> Json<UserInfoR
         user: PublicUser {
             id: user.id,
             username: user.username,
+            role: user.role,
         },
     })
 }
@@ -1011,6 +1181,7 @@ async fn qr_login_handler(
         PublicUser {
             id: user.id,
             username: user.username.unwrap_or_else(|| "external_user".to_string()),
+            role: to_api_role(user.role),
         },
         token,
     );

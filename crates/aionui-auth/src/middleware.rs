@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
 
+use aionui_api_types::UserRole;
 use aionui_common::ApiError;
 use aionui_db::{IUserRepository, UserStatus, UserType};
 
@@ -52,6 +53,9 @@ pub struct CurrentUser {
     pub user_type: UserType,
     /// Current account status. Authenticated requests only receive active users.
     pub status: UserStatus,
+    /// Account privilege level. `admin` routes additionally require
+    /// [`require_admin`](crate::admin::require_admin), which checks this.
+    pub role: UserRole,
 }
 
 impl CurrentUser {
@@ -61,7 +65,21 @@ impl CurrentUser {
             username: "system_default_user".to_string(),
             user_type: UserType::Local,
             status: UserStatus::Active,
+            // Local mode is the single-operator Electron deployment; the
+            // fixed default user must be able to reach admin endpoints.
+            role: UserRole::Admin,
         }
+    }
+}
+
+/// Map the database role enum onto the API contract enum.
+///
+/// The two enums are intentionally separate (aionui-db and aionui-api-types
+/// must not depend on each other); this is the single translation point.
+pub(crate) fn to_api_role(role: aionui_db::UserRole) -> UserRole {
+    match role {
+        aionui_db::UserRole::Admin => UserRole::Admin,
+        aionui_db::UserRole::Member => UserRole::Member,
     }
 }
 
@@ -140,6 +158,7 @@ pub async fn auth_middleware(
         username: user.username.unwrap_or_else(|| "external_user".to_string()),
         user_type: user.user_type,
         status: user.status,
+        role: to_api_role(user.role),
     });
 
     Ok(next.run(request).await)
@@ -199,6 +218,7 @@ async fn runtime_token_channel(state: &AuthState, mut request: Request, next: Ne
         username: user.username.unwrap_or_else(|| "external_user".to_string()),
         user_type: user.user_type,
         status: user.status,
+        role: to_api_role(user.role),
     });
 
     Ok(next.run(request).await)

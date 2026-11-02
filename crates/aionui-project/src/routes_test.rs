@@ -48,6 +48,7 @@ async fn setup() -> (Router, String, String, TempDir, Database) {
             username: "admin".to_owned(),
             user_type: aionui_db::UserType::Local,
             status: aionui_db::UserStatus::Active,
+            role: aionui_api_types::UserRole::Member,
         }));
     (router, project_id, workspace_pe_id, dir, db)
 }

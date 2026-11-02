@@ -64,6 +64,7 @@ fn request_for_user(id: &str, username: &str) -> Request<Body> {
         username: username.to_owned(),
         user_type: UserType::Local,
         status: UserStatus::Active,
+        role: aionui_api_types::UserRole::Member,
     });
     req
 }

@@ -2,10 +2,12 @@
 
 //! JWT authentication, password hashing, CSRF protection, rate limiting, and auth middleware.
 mod account;
+mod admin;
 mod cookie;
 mod csrf;
 mod error;
 mod extract;
+mod invite;
 mod jwt;
 pub mod middleware;
 mod password;
@@ -23,6 +25,12 @@ pub use error::AuthError;
 
 // Local-account password provisioning
 pub use account::{AccountError, PasswordOutcome, create_local_user, set_local_password};
+
+// Invite codes
+pub use invite::{CreatedInvite, INVITE_CODE_LENGTH, InviteError, generate_invite_code, hash_invite_code};
+
+// Admin routes + middleware
+pub use admin::{AdminRouterState, admin_routes, require_admin};
 
 // Storage-encryption-secret provisioning and inspection
 pub use secret::{

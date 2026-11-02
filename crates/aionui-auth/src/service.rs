@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aionui_api_types::{
     EnsureExternalSessionRequest, EnsureExternalSessionResponse, EnsureExternalUserRequest, EnsureExternalUserResponse,
-    ExternalUserType, PublicUser, RevokeExternalSessionRequest, RevokeExternalSessionResponse,
+    ExternalUserType, PublicUser, RevokeExternalSessionRequest, RevokeExternalSessionResponse, UserRole,
 };
 use aionui_db::{ExternalUserProjection, IUserRepository, UserStatus, UserType, models::User};
 
@@ -138,7 +138,11 @@ impl AuthProvisionService {
 
         Ok(ExternalSessionExchange {
             response: EnsureExternalSessionResponse {
-                user: PublicUser { id: user.id, username },
+                user: PublicUser {
+                    id: user.id,
+                    username,
+                    role: UserRole::Member,
+                },
                 session_generation: user.session_generation,
             },
             token,
