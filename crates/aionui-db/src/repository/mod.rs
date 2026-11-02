@@ -7,6 +7,8 @@ pub mod conversation;
 pub mod cron;
 pub mod diagnostics;
 mod diagnostics_sanitizer;
+pub mod global_settings;
+pub mod invite_code;
 pub mod mcp_server;
 pub mod oauth_token;
 pub mod project;
@@ -23,6 +25,8 @@ mod sqlite_client_preference;
 mod sqlite_conversation;
 mod sqlite_cron;
 mod sqlite_diagnostics;
+mod sqlite_global_settings;
+mod sqlite_invite_code;
 mod sqlite_mcp_server;
 mod sqlite_oauth_token;
 mod sqlite_project;
@@ -52,6 +56,8 @@ pub use diagnostics::{
     FeedbackDiagnosticsDbContext, FeedbackDiagnosticsProfile, FeedbackDiagnosticsProfileResult,
     FeedbackDiagnosticsRequest, FeedbackDiagnosticsResult, IFeedbackDiagnosticsRepository,
 };
+pub use global_settings::IGlobalSettingsRepository;
+pub use invite_code::IInviteCodeRepository;
 pub use mcp_server::IMcpServerRepository;
 pub use oauth_token::IOAuthTokenRepository;
 pub use project::IProjectStore;
@@ -71,6 +77,8 @@ pub use sqlite_client_preference::SqliteClientPreferenceRepository;
 pub use sqlite_conversation::SqliteConversationRepository;
 pub use sqlite_cron::SqliteCronRepository;
 pub use sqlite_diagnostics::SqliteFeedbackDiagnosticsRepository;
+pub use sqlite_global_settings::SqliteGlobalSettingsRepository;
+pub use sqlite_invite_code::SqliteInviteCodeRepository;
 pub use sqlite_mcp_server::SqliteMcpServerRepository;
 pub use sqlite_oauth_token::SqliteOAuthTokenRepository;
 pub use sqlite_project::SqliteProjectStore;

@@ -21,6 +21,23 @@ impl UserType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    Admin,
+    Member,
+}
+
+impl UserRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum UserStatus {
     Active,
     Disabled,
@@ -57,6 +74,9 @@ pub struct User {
     /// JWT secret on first boot so existing ciphertext still decrypts.
     pub encryption_secret: Option<String>,
     pub status: UserStatus,
+    /// Account privilege level. `admin` manages users, invites, and the
+    /// shared-key pool; `member` is an ordinary account.
+    pub role: UserRole,
     pub session_generation: i64,
     pub created_at: TimestampMs,
     pub updated_at: TimestampMs,

@@ -1,5 +1,5 @@
 use crate::error::DbError;
-use crate::models::{ExternalUserProjection, User, UserStatus, UserType};
+use crate::models::{ExternalUserProjection, User, UserRole, UserStatus, UserType};
 
 /// User data access abstraction.
 ///
@@ -30,7 +30,15 @@ pub trait IUserRepository: Send + Sync {
     /// Creates a new user and returns the inserted row.
     ///
     /// Returns `DbError::Conflict` if the username already exists.
+    /// The new account has the `member` role; use [`IUserRepository::create_user_with_role`]
+    /// to create an account with a different role.
     async fn create_user(&self, username: &str, password_hash: &str) -> Result<User, DbError>;
+
+    /// Creates a new user with an explicit role and returns the inserted row.
+    ///
+    /// Returns `DbError::Conflict` if the username already exists.
+    async fn create_user_with_role(&self, username: &str, password_hash: &str, role: UserRole)
+    -> Result<User, DbError>;
 
     /// Finds an active local password user by username.
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, DbError>;
@@ -105,6 +113,9 @@ pub trait IUserRepository: Send + Sync {
     /// Updates a user's status. Transitioning into `disabled` also revokes
     /// existing sessions by incrementing `session_generation`.
     async fn set_status(&self, user_id: &str, status: UserStatus) -> Result<(), DbError>;
+
+    /// Updates a user's role (`admin` or `member`).
+    async fn update_role(&self, user_id: &str, role: UserRole) -> Result<(), DbError>;
 
     /// Increments a user's session generation and returns the new value.
     async fn increment_session_generation(&self, user_id: &str) -> Result<i64, DbError>;

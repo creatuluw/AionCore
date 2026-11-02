@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::DbError;
-use crate::models::{ExternalUserProjection, User, UserStatus, UserType};
+use crate::models::{ExternalUserProjection, User, UserRole, UserStatus, UserType};
 use crate::repository::IUserRepository;
 
 /// SQLite-backed implementation of [`IUserRepository`].
@@ -77,16 +77,27 @@ impl IUserRepository for SqliteUserRepository {
     }
 
     async fn create_user(&self, username: &str, password_hash: &str) -> Result<User, DbError> {
+        self.create_user_with_role(username, password_hash, UserRole::Member)
+            .await
+    }
+
+    async fn create_user_with_role(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: UserRole,
+    ) -> Result<User, DbError> {
         let id = aionui_common::generate_prefixed_id("user");
         let now = aionui_common::now_ms();
 
         sqlx::query(
-            "INSERT INTO users (id, user_type, username, password_hash, status, session_generation, created_at, updated_at) \
-             VALUES (?, 'local', ?, ?, 'active', 0, ?, ?)",
+            "INSERT INTO users (id, user_type, username, password_hash, status, role, session_generation, created_at, updated_at) \
+             VALUES (?, 'local', ?, ?, 'active', ?, 0, ?, ?)",
         )
         .bind(&id)
         .bind(username)
         .bind(password_hash)
+        .bind(role.as_str())
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -109,6 +120,7 @@ impl IUserRepository for SqliteUserRepository {
             jwt_secret: None,
             encryption_secret: None,
             status: UserStatus::Active,
+            role,
             session_generation: 0,
             created_at: now,
             updated_at: now,
@@ -433,6 +445,22 @@ impl IUserRepository for SqliteUserRepository {
         .bind(user_id)
         .execute(&self.pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound(format!("User '{user_id}' not found")));
+        }
+
+        Ok(())
+    }
+
+    async fn update_role(&self, user_id: &str, role: UserRole) -> Result<(), DbError> {
+        let now = aionui_common::now_ms();
+        let result = sqlx::query("UPDATE users SET role = ?, updated_at = ? WHERE id = ?")
+            .bind(role.as_str())
+            .bind(now)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound(format!("User '{user_id}' not found")));

@@ -678,11 +678,14 @@ async fn align_reconciled_mcp_migration_checksum(conn: &mut sqlx::SqliteConnecti
 /// The system user has an empty password hash, which signals "needs setup".
 /// Username defaults to `admin` — matches the legacy web-host login flow so
 /// users upgrading from pre-M6 builds keep the same login username.
+/// The row is created with the `admin` role: on fresh installs migration 045's
+/// role backfill UPDATE ran against an empty `users` table, so this INSERT is
+/// the only place the bootstrap account gets its admin privilege.
 async fn ensure_system_user(pool: &SqlitePool) -> Result<(), DbError> {
     let now = aionui_common::now_ms();
     sqlx::query(
-        "INSERT OR IGNORE INTO users (id, username, password_hash, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO users (id, username, password_hash, role, created_at, updated_at) \
+         VALUES (?, ?, ?, 'admin', ?, ?)",
     )
     .bind("system_default_user")
     .bind("admin")
