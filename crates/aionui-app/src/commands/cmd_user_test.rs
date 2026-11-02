@@ -29,6 +29,7 @@ fn format_user_lines_never_leaks_secrets() {
         jwt_secret: Some("TOPSECRETJWTKEY".to_owned()),
         encryption_secret: Some("TOPSECRETENCKEY".to_owned()),
         status: UserStatus::Active,
+        role: aionui_db::UserRole::Member,
         session_generation: 0,
         created_at: 111,
         updated_at: 222,

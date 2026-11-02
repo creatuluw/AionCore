@@ -25,11 +25,11 @@ use std::process::ExitCode;
 
 use aionui_auth::{AccountError, PasswordOutcome, create_local_user, set_local_password, validate_username};
 use aionui_db::{
-    Database, IUserRepository, SqliteUserRepository, init_database, maybe_copy_legacy_database,
+    Database, IUserRepository, SqliteUserRepository, UserRole, init_database, maybe_copy_legacy_database,
     models::{User, UserStatus},
 };
 
-use crate::cli::{Cli, CreateUserArgs, SetPasswordArgs, UserArgs, UserCommand, UserStatusArgs};
+use crate::cli::{Cli, CreateUserArgs, SetPasswordArgs, SetRoleArgs, UserArgs, UserCommand, UserStatusArgs};
 use crate::commands::error::{CliBoundaryCode, CliBoundaryError};
 
 const SUBCOMMAND: &str = "user";
@@ -41,7 +41,41 @@ pub async fn run_user(cli: &Cli, args: &UserArgs) -> Result<ExitCode, CliBoundar
         UserCommand::List => list_all(cli).await,
         UserCommand::Disable(args) => set_user_status(cli, args, UserStatus::Disabled).await,
         UserCommand::Enable(args) => set_user_status(cli, args, UserStatus::Active).await,
+        UserCommand::SetRole(args) => set_role(cli, args).await,
     }
+}
+
+/// CLI adapter for `user set-role`: resolve the named local password account,
+/// flip its role, close, and report. Like the rest of this subcommand it
+/// never starts the HTTP server. Role changes take effect on the user's next
+/// login; live sessions are not revoked.
+async fn set_role(cli: &Cli, args: &SetRoleArgs) -> Result<ExitCode, CliBoundaryError> {
+    let role = UserRole::parse(&args.role).ok_or_else(|| input_error("role must be 'admin' or 'member'"))?;
+
+    let database = open_database(cli).await?;
+    let repo = SqliteUserRepository::new(database.pool().clone());
+    let label = apply_user_role(&repo, &args.username, role).await?;
+    database.close().await;
+
+    println!("Role of {label} set to {}.", role.as_str());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve the local password account by username and set its role, returning
+/// a non-sensitive label for the affected account. Repo-driven (not
+/// `&Cli`-driven) so it is unit-testable over an in-memory database.
+async fn apply_user_role(
+    repo: &dyn IUserRepository,
+    username: &str,
+    role: UserRole,
+) -> Result<String, CliBoundaryError> {
+    let user = repo
+        .find_by_username(username)
+        .await
+        .map_err(|_| database_error())?
+        .ok_or_else(user_not_found_error)?;
+    repo.update_role(&user.id, role).await.map_err(|_| database_error())?;
+    Ok(format!("{} (id={})", user.username.as_deref().unwrap_or("-"), user.id))
 }
 
 async fn set_password(cli: &Cli, args: &SetPasswordArgs) -> Result<ExitCode, CliBoundaryError> {
@@ -137,8 +171,8 @@ async fn list_all(cli: &Cli) -> Result<ExitCode, CliBoundaryError> {
 fn format_user_lines(users: &[User]) -> Vec<String> {
     let mut lines = Vec::with_capacity(users.len() + 1);
     lines.push(format!(
-        "{:<24}  {:<8}  {:<20}  {:<9}  {:<14}  {}",
-        "ID", "TYPE", "USERNAME", "STATUS", "CREATED_MS", "LAST_LOGIN_MS"
+        "{:<24}  {:<8}  {:<20}  {:<9}  {:<8}  {:<14}  {}",
+        "ID", "TYPE", "USERNAME", "STATUS", "ROLE", "CREATED_MS", "LAST_LOGIN_MS"
     ));
     for user in users {
         let last_login = user
@@ -146,11 +180,12 @@ fn format_user_lines(users: &[User]) -> Vec<String> {
             .map(|ms| ms.to_string())
             .unwrap_or_else(|| "-".to_owned());
         lines.push(format!(
-            "{:<24}  {:<8}  {:<20}  {:<9}  {:<14}  {}",
+            "{:<24}  {:<8}  {:<20}  {:<9}  {:<8}  {:<14}  {}",
             user.id,
             user.user_type.as_str(),
             user.username.as_deref().unwrap_or("-"),
             user.status.as_str(),
+            user.role.as_str(),
             user.created_at,
             last_login,
         ));

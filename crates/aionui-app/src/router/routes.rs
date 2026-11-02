@@ -1,7 +1,7 @@
 //! Top-level router assembly: middleware stack + module route merges.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::DefaultBodyLimit;
@@ -20,8 +20,10 @@ use aionui_api_types::{ErrorResponse, WebSocketMessage};
 use aionui_assets::{AssetRouterState, asset_routes};
 use aionui_assistant::assistant_routes;
 use aionui_auth::{
-    AuthIdentityMode, AuthRouterState, AuthState, IRuntimeTokenVerifier, RefreshCoalescer,
-    SystemDefaultFilesystemAdopter, auth_middleware, auth_routes, csrf_middleware, security_headers_middleware,
+    AdminRouterState, AuthIdentityMode, AuthRouterState, AuthState, IRuntimeTokenVerifier, RateLimiter,
+    RefreshCoalescer, SessionRevokedHook, SystemDefaultFilesystemAdopter, admin_routes, api_rate_limit_middleware,
+    auth_middleware, auth_routes, authenticated_action_rate_limit_middleware, csrf_middleware, require_admin,
+    security_headers_middleware,
 };
 use aionui_channel::channel_routes;
 #[cfg(feature = "weixin")]
@@ -209,10 +211,57 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
     let boot = Instant::now();
     tracing::info!("startup: route tree build with states started");
 
+    // Shared by the auth and admin route states: fires on every server-side
+    // session revocation (external revoke, admin disable) so live WebSockets
+    // and per-user runtimes are torn down immediately.
+    let session_revoked_hook: Arc<SessionRevokedHook> = Arc::new({
+        let ws_manager = services.ws_manager.clone();
+        let conversation_service = states.conversation.service.clone();
+        let team_service = states.team.service.clone();
+        let channel_manager = states.channel.manager.clone();
+        let channel_session_manager = states.channel.session_manager.clone();
+        let office_watch_manager = states.office.watch_manager.clone();
+        move |user_id: &str| {
+            ws_manager.disconnect_user(user_id, "session revoked");
+            let stopped_team_sessions = team_service.stop_sessions_for_user(user_id);
+            if stopped_team_sessions > 0 {
+                tracing::info!(
+                    user_id = %user_id,
+                    stopped_team_sessions,
+                    "stopped team sessions after session revocation"
+                );
+            }
+            let user_id = user_id.to_owned();
+            let conversation_service = conversation_service.clone();
+            let channel_manager = channel_manager.clone();
+            let channel_session_manager = channel_session_manager.clone();
+            let office_watch_manager = office_watch_manager.clone();
+            tokio::spawn(async move {
+                channel_manager.shutdown_for_user(&user_id).await;
+                office_watch_manager.stop_all_for_user(&user_id);
+                if let Err(err) = channel_session_manager.clear_all_sessions(&user_id).await {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        error = %err,
+                        "failed to clear channel sessions after session revocation"
+                    );
+                }
+                if let Err(err) = conversation_service.terminate_runtime_for_user(&user_id).await {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        error = %err,
+                        "failed to terminate runtimes after session revocation"
+                    );
+                }
+            });
+        }
+    });
+
     let auth_state = AuthRouterState {
         jwt_service: services.jwt_service.clone(),
         refresh_coalescer: RefreshCoalescer::new(),
         user_repo: services.user_repo.clone(),
+        invite_repo: services.invite_repo.clone(),
         fs_adopter: Some(Arc::new(SkillFilesystemAdopter {
             skill_paths: services.skill_paths.clone(),
             skill_repo: services.skill_repo.clone(),
@@ -221,50 +270,16 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         qr_token_store: services.qr_token_store.clone(),
         identity_mode: auth_identity_mode(services.identity_mode),
         bootstrap_secret: services.bootstrap_secret.clone(),
-        session_revoked_hook: {
-            let ws_manager = services.ws_manager.clone();
-            let conversation_service = states.conversation.service.clone();
-            let team_service = states.team.service.clone();
-            let channel_manager = states.channel.manager.clone();
-            let channel_session_manager = states.channel.session_manager.clone();
-            let office_watch_manager = states.office.watch_manager.clone();
-            Some(Arc::new(move |user_id: &str| {
-                ws_manager.disconnect_user(user_id, "session revoked");
-                let stopped_team_sessions = team_service.stop_sessions_for_user(user_id);
-                if stopped_team_sessions > 0 {
-                    tracing::info!(
-                        user_id = %user_id,
-                        stopped_team_sessions,
-                        "stopped team sessions after session revocation"
-                    );
-                }
-                let user_id = user_id.to_owned();
-                let conversation_service = conversation_service.clone();
-                let channel_manager = channel_manager.clone();
-                let channel_session_manager = channel_session_manager.clone();
-                let office_watch_manager = office_watch_manager.clone();
-                tokio::spawn(async move {
-                    channel_manager.shutdown_for_user(&user_id).await;
-                    office_watch_manager.stop_all_for_user(&user_id);
-                    if let Err(err) = channel_session_manager.clear_all_sessions(&user_id).await {
-                        tracing::warn!(
-                            user_id = %user_id,
-                            error = %err,
-                            "failed to clear channel sessions after session revocation"
-                        );
-                    }
-                    if let Err(err) = conversation_service.terminate_runtime_for_user(&user_id).await {
-                        tracing::warn!(
-                            user_id = %user_id,
-                            error = %err,
-                            "failed to terminate runtimes after session revocation"
-                        );
-                    }
-                });
-            }))
-        },
+        session_revoked_hook: Some(session_revoked_hook.clone()),
         local: services.local,
         aionpro_mode: services.identity_mode == crate::config::IdentityMode::AionPro,
+    };
+
+    let admin_state = AdminRouterState {
+        user_repo: services.user_repo.clone(),
+        invite_repo: services.invite_repo.clone(),
+        settings_repo: services.global_settings_repo.clone(),
+        session_revoked_hook: Some(session_revoked_hook.clone()),
     };
 
     let auth_mw_state = AuthState {
@@ -275,6 +290,22 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
             runtime_token_service: services.runtime_token_service.clone(),
         })),
     };
+
+    // Admin routes: auth + admin gate + rate limiting. route_layer order
+    // (last added = outermost = first to process): api limiter -> auth ->
+    // require_admin -> action limiter -> handler.
+    let admin_api_limiter = Arc::new(RateLimiter::api());
+    let admin_action_limiter = Arc::new(RateLimiter::authenticated_action());
+    admin_api_limiter.start_cleanup_task(Duration::from_secs(60));
+    admin_action_limiter.start_cleanup_task(Duration::from_secs(60));
+    let admin_protected = admin_routes(admin_state)
+        .route_layer(from_fn_with_state(
+            admin_action_limiter,
+            authenticated_action_rate_limit_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn(require_admin))
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware))
+        .route_layer(from_fn_with_state(admin_api_limiter, api_rate_limit_middleware));
 
     // System routes protected by auth middleware
     let system_authenticated =
@@ -399,6 +430,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         .merge(antigravity_hook)
         .route("/health", get(health_check))
         .merge(auth_routes(auth_state))
+        .merge(admin_protected)
         .merge(system_authenticated)
         .merge(conversation_authenticated)
         .merge(conversation_ops_authenticated)

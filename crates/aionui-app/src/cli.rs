@@ -740,6 +740,23 @@ pub(crate) enum UserCommand {
     /// Re-enable a previously disabled local user account, restoring login.
     /// `--username` is required. Does not create sessions or reset the password.
     Enable(UserStatusArgs),
+    /// Set a local user's privilege role (`admin` or `member`). `--username`
+    /// is required and must name an existing local password account. Takes
+    /// effect on the user's next login; live sessions are not revoked.
+    SetRole(SetRoleArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct SetRoleArgs {
+    /// Target username (required). Must name an existing local password
+    /// account; unknown names fail with `CLI_USER_NOT_FOUND`.
+    #[arg(long)]
+    pub username: String,
+
+    /// New role: `admin` (manages users, invites, pool settings) or `member`
+    /// (ordinary account).
+    #[arg(long)]
+    pub role: String,
 }
 
 #[derive(Args, Debug, Clone)]

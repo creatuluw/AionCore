@@ -12,10 +12,11 @@ use aionui_auth::{CookieConfig, JwtService, QrTokenStore, resolve_encryption_sec
 use aionui_common::OnConversationDelete;
 use aionui_conversation::{ConversationService, runtime_state::ConversationRuntimeStateService};
 use aionui_db::{
-    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IMcpServerRepository,
-    IProjectStore, ISkillRepository, IUserOrderStore, IUserRepository, SqliteAcpSessionRepository,
-    SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository, SqliteAssistantOverlayRepository,
-    SqliteAssistantPreferenceRepository, SqliteConversationRepository, SqliteMcpServerRepository, SqliteProjectStore,
+    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IGlobalSettingsRepository,
+    IInviteCodeRepository, IMcpServerRepository, IProjectStore, ISkillRepository, IUserOrderStore, IUserRepository,
+    SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteAssistantDefinitionRepository,
+    SqliteAssistantOverlayRepository, SqliteAssistantPreferenceRepository, SqliteConversationRepository,
+    SqliteGlobalSettingsRepository, SqliteInviteCodeRepository, SqliteMcpServerRepository, SqliteProjectStore,
     SqliteProviderRepository, SqliteSettingsRepository, SqliteSkillRepository, SqliteUserOrderStore,
     SqliteUserRepository,
 };
@@ -32,6 +33,11 @@ pub struct AppServices {
     pub database: Database,
     pub jwt_service: Arc<JwtService>,
     pub user_repo: Arc<dyn IUserRepository>,
+    /// Invite codes backing `POST /api/auth/register` and the admin invite
+    /// endpoints. Shared by the auth and admin route states.
+    pub invite_repo: Arc<dyn IInviteCodeRepository>,
+    /// Shared-pool global settings singleton (`global_settings` row).
+    pub global_settings_repo: Arc<dyn IGlobalSettingsRepository>,
     pub cookie_config: Arc<CookieConfig>,
     pub qr_token_store: Arc<QrTokenStore>,
     pub ws_manager: Arc<WebSocketManager>,
@@ -168,6 +174,10 @@ impl AppServices {
         let dump_prompts = config.dump_prompts;
         let app_version = config.app_version.clone();
         let user_repo: Arc<dyn IUserRepository> = Arc::new(SqliteUserRepository::new(database.pool().clone()));
+        let invite_repo: Arc<dyn IInviteCodeRepository> =
+            Arc::new(SqliteInviteCodeRepository::new(database.pool().clone()));
+        let global_settings_repo: Arc<dyn IGlobalSettingsRepository> =
+            Arc::new(SqliteGlobalSettingsRepository::new(database.pool().clone()));
 
         // Resolve the JWT *signing* secret: env var → system user db field →
         // random generation. This signs/verifies JWTs only; the storage-
@@ -429,6 +439,8 @@ impl AppServices {
             jwt_service: Arc::new(JwtService::new(secret.clone())),
             antigravity_hook_tokens,
             user_repo,
+            invite_repo,
+            global_settings_repo,
             cookie_config: Arc::new(CookieConfig::from_env()),
             qr_token_store: Arc::new(QrTokenStore::new()),
             ws_manager: Arc::new(WebSocketManager::new()),

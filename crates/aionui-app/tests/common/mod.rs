@@ -290,6 +290,16 @@ pub fn json_with_token(method_str: &str, uri: &str, body: serde_json::Value, tok
         .unwrap()
 }
 
+/// POST JSON without auth headers (login, register — CSRF-exempt paths).
+pub fn post_json(uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
 pub fn delete_with_token(uri: &str, token: &str, csrf: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
