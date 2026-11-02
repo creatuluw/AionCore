@@ -4761,6 +4761,7 @@ pub(crate) fn agent_error_top_level_code(error: &AgentError) -> &'static str {
         AgentError::BadGateway(_) | AgentError::Acp(_) => "BAD_GATEWAY",
         AgentError::Timeout(_) => "TIMEOUT",
         AgentError::RateLimited => "RATE_LIMITED",
+        AgentError::PoolQuotaExceeded => "POOL_QUOTA_EXCEEDED",
         AgentError::ConversationArchived(_) => "CONVERSATION_ARCHIVED",
         AgentError::WorkspacePathRuntimeUnavailable(_) => "WORKSPACE_PATH_RUNTIME_UNAVAILABLE",
         AgentError::Internal(_) => "INTERNAL_ERROR",

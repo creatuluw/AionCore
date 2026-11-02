@@ -45,6 +45,10 @@ pub struct AgentFactoryDeps {
     /// run through `SessionAgentTask` (direct-CLI) instead of the ACP manager, so
     /// the spawner is unconditionally wired — there is no fallback to the ACP path.
     pub session_spawner: Arc<dyn aionui_process::Spawner>,
+    /// Shared-key-pool fair-use meter. `None` disables the shared-pool
+    /// fallback: only the requester's own providers resolve (tests/composition
+    /// paths that never see shared rows).
+    pub pool_meter: Option<Arc<crate::pool_metering::SharedPoolMeter>>,
     /// Base URL the Antigravity permission hook calls back on (e.g.
     /// `http://127.0.0.1:25808`). agy cannot prompt for permission in headless
     /// mode, so AionUi registers its own binary as a PreToolUse hook and

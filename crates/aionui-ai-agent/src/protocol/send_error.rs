@@ -170,6 +170,15 @@ impl AgentSendError {
                 false,
                 resolution(AgentErrorResolutionKind::Retry, None),
             ),
+            AgentError::PoolQuotaExceeded => Self::new(
+                "The shared key pool's daily request cap is exhausted",
+                AgentErrorCode::UserLlmProviderRateLimited,
+                AgentErrorOwnership::UserLlmProvider,
+                Some(detail),
+                true,
+                false,
+                resolution(AgentErrorResolutionKind::Retry, None),
+            ),
             AgentError::BadGateway(_) => classify_upstream_detail(&detail),
             AgentError::Acp(err) => Self::from_acp_error_ref(err),
             _ => Self::new(

@@ -22,7 +22,7 @@ use aionui_db::{
     SqliteAssistantOverlayRepository, SqliteAssistantOverrideRepository, SqliteAssistantPreferenceRepository,
     SqliteAssistantRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
     SqliteFeedbackDiagnosticsRepository, SqliteGlobalSettingsRepository, SqliteProviderRepository,
-    SqliteRemoteAgentRepository, SqliteSettingsRepository,
+    SqliteRemoteAgentRepository, SqliteSettingsRepository, SqliteUsageCounterRepository,
 };
 use aionui_extension::{
     AssistantRuleDispatcher, ExtensionRegistry, ExtensionRouterState, ExtensionStateStore, ExternalPathsManager,
@@ -281,12 +281,17 @@ pub async fn build_module_states(
     let pool = services.database.pool().clone();
     let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(pool.clone()));
     let encryption_key = derive_encryption_key(&services.encryption_secret_raw);
+    let pool_meter = aionui_ai_agent::pool_metering::SharedPoolMeter::new(
+        Arc::new(SqliteUsageCounterRepository::new(pool.clone())),
+        Some(services.global_settings_repo.clone()),
+    );
     let agent_service = AgentService::new(
         services.agent_registry.clone(),
         services.event_bus.clone(),
         provider_repo,
         encryption_key,
         services.data_dir.clone(),
+        Some(pool_meter),
     );
     services
         .conversation_service

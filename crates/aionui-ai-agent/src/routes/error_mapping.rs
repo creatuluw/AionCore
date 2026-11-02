@@ -15,6 +15,12 @@ pub(crate) fn agent_error_to_api_error(err: AgentError) -> ApiError {
         AgentError::BadGateway(message) => ApiError::BadGateway(message),
         AgentError::Timeout(message) => ApiError::Timeout(message),
         AgentError::RateLimited => ApiError::RateLimited,
+        AgentError::PoolQuotaExceeded => ApiError::coded(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "POOL_QUOTA_EXCEEDED",
+            "Shared key pool daily request cap exceeded",
+            None,
+        ),
         AgentError::ConversationArchived(message) => ApiError::ConversationArchived(message),
         AgentError::WorkspacePathRuntimeUnavailable(path) => ApiError::WorkspacePathRuntimeUnavailable(path),
         AgentError::Internal(message) => ApiError::Internal(message),

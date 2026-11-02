@@ -31,14 +31,23 @@ pub struct ProviderHealthCheckService {
     provider_repo: Arc<dyn IProviderRepository>,
     encryption_key: [u8; 32],
     data_dir: PathBuf,
+    /// Shared-key-pool fair-use meter; `None` disables the shared-pool
+    /// fallback (tests only).
+    pool_meter: Option<crate::pool_metering::SharedPoolMeter>,
 }
 
 impl ProviderHealthCheckService {
-    pub fn new(provider_repo: Arc<dyn IProviderRepository>, encryption_key: [u8; 32], data_dir: PathBuf) -> Self {
+    pub fn new(
+        provider_repo: Arc<dyn IProviderRepository>,
+        encryption_key: [u8; 32],
+        data_dir: PathBuf,
+        pool_meter: Option<crate::pool_metering::SharedPoolMeter>,
+    ) -> Self {
         Self {
             provider_repo,
             encryption_key,
             data_dir,
+            pool_meter,
         }
     }
 
@@ -56,12 +65,16 @@ impl ProviderHealthCheckService {
 
         let provider_id = req.provider_id.trim();
         let model = req.model.trim();
-        let row = self
-            .provider_repo
-            .find_by_id(user_id, provider_id)
-            .await
-            .map_err(|e| AgentError::internal(format!("Failed to load provider config: {e}")))?
-            .ok_or_else(|| AgentError::bad_request(format!("Provider '{provider_id}' not found")))?;
+        // Same resolution contract as the aionrs factory: own provider first,
+        // then shared-pool fallback with fair-use metering (a probe burns
+        // shared-pool quota just like a session build).
+        let row = crate::pool_metering::resolve_provider_for_use(
+            self.provider_repo.as_ref(),
+            self.pool_meter.as_ref(),
+            user_id,
+            provider_id,
+        )
+        .await?;
 
         let config = self.resolve_probe_config(&row, model)?;
         run_probe(row.id, row.platform, config).await
@@ -349,7 +362,15 @@ mod tests {
             unreachable!("provider repo is not used by resolve_probe_config")
         }
 
+        async fn list_effective(&self, _user_id: &str, _include_shared: bool) -> Result<Vec<Provider>, DbError> {
+            unreachable!("provider repo is not used by resolve_probe_config")
+        }
+
         async fn find_by_id(&self, _user_id: &str, _id: &str) -> Result<Option<Provider>, DbError> {
+            unreachable!("provider repo is not used by resolve_probe_config")
+        }
+
+        async fn find_by_id_global(&self, _id: &str) -> Result<Option<Provider>, DbError> {
             unreachable!("provider repo is not used by resolve_probe_config")
         }
 
@@ -376,6 +397,7 @@ mod tests {
             provider_repo: Arc::new(UnusedProviderRepository),
             encryption_key: TEST_KEY,
             data_dir: PathBuf::from("/tmp/aioncore-provider-health-test"),
+            pool_meter: None,
         }
     }
 
@@ -387,6 +409,7 @@ mod tests {
             name: "Test Anthropic".to_owned(),
             base_url: "https://api.anthropic.com".to_owned(),
             api_key_encrypted: encrypt_string("sk-test", &TEST_KEY).unwrap(),
+            visibility: "private".to_owned(),
             models: r#"["claude-sonnet-4-20250514"]"#.to_owned(),
             enabled: true,
             capabilities: "[]".to_owned(),

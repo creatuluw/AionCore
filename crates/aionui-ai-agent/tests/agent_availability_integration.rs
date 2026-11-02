@@ -56,7 +56,7 @@ fn agent_service(
     provider_repo: Arc<dyn IProviderRepository>,
     data_dir: std::path::PathBuf,
 ) -> Arc<AgentService> {
-    AgentService::new(registry, Arc::new(NoopBroadcaster), provider_repo, [0; 32], data_dir)
+    AgentService::new(registry, Arc::new(NoopBroadcaster), provider_repo, [0; 32], data_dir, None)
 }
 
 #[tokio::test]

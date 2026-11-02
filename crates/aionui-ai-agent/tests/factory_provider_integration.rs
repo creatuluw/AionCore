@@ -93,6 +93,9 @@ fn make_factory(
         backend_binary_path: Arc::new(PathBuf::from("/tmp/aionrs-test/aioncore")),
         mcp_server_repo: None,
         session_spawner,
+        // No shared-pool fallback in this test: provider resolution is
+        // owner-scoped.
+        pool_meter: None,
         // No hook bridge in this test: it exercises provider wiring, not the
         // Antigravity permission path.
         antigravity_hook_base_url: None,

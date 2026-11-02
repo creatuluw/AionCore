@@ -124,12 +124,17 @@ pub(super) async fn build(
     }
 
     let provider_id = &model.provider_id;
-    let row = deps
-        .provider_repo
-        .find_by_id(&ctx.user_id, provider_id)
-        .await
-        .map_err(|e| AgentError::internal(format!("Failed to load provider config: {e}")))?
-        .ok_or_else(|| AgentError::bad_request(format!("Provider '{provider_id}' not found")))?;
+    // Owner-scoped lookup first; non-owners fall back to the shared pool with
+    // fair-use metering (shared key service on, visibility shared, enabled,
+    // within the daily request cap). Private rows of other users surface as
+    // NotFound, identical to a missing id.
+    let row = crate::pool_metering::resolve_provider_for_use(
+        deps.provider_repo.as_ref(),
+        deps.pool_meter.as_deref(),
+        &ctx.user_id,
+        provider_id,
+    )
+    .await?;
 
     let api_key = aionui_common::decrypt_string(&row.api_key_encrypted, &deps.encryption_key)
         .map_err(|e| AgentError::internal(e.to_string()))?;

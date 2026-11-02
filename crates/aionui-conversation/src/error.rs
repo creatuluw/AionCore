@@ -176,6 +176,7 @@ impl From<AgentError> for ConversationError {
             AgentError::Forbidden(reason) => Self::Forbidden { reason },
             AgentError::Conflict(reason) => Self::Busy { reason },
             AgentError::RateLimited => Self::RateLimited,
+            AgentError::PoolQuotaExceeded => Self::RateLimited,
             AgentError::Internal(reason) => Self::Internal { reason },
             AgentError::BadGateway(reason) => Self::BadGateway { reason },
             AgentError::Timeout(reason) => Self::Timeout { reason },

@@ -38,8 +38,10 @@ impl AgentService {
         provider_repo: Arc<dyn IProviderRepository>,
         encryption_key: [u8; 32],
         data_dir: PathBuf,
+        pool_meter: Option<crate::pool_metering::SharedPoolMeter>,
     ) -> Arc<Self> {
-        let provider_health = ProviderHealthCheckService::new(provider_repo.clone(), encryption_key, data_dir.clone());
+        let provider_health =
+            ProviderHealthCheckService::new(provider_repo.clone(), encryption_key, data_dir.clone(), pool_meter);
         let availability = AgentAvailabilityService::new(registry.clone(), provider_repo);
         Arc::new(Self {
             registry,

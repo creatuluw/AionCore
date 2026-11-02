@@ -368,6 +368,10 @@ impl AppServices {
             machine_id,
         ));
 
+        let pool_meter = Arc::new(aionui_ai_agent::pool_metering::SharedPoolMeter::new(
+            Arc::new(aionui_db::SqliteUsageCounterRepository::new(database.pool().clone())),
+            Some(global_settings_repo.clone()),
+        ));
         let factory = build_agent_factory(AgentFactoryDeps {
             skill_manager: AcpSkillManager::new_with_repo(skill_paths.clone(), skill_repo.clone()),
             provider_repo,
@@ -380,6 +384,7 @@ impl AppServices {
             backend_binary_path: backend_binary_path.clone(),
             mcp_server_repo: Some(mcp_server_repo),
             session_spawner,
+            pool_meter: Some(pool_meter),
             // agy cannot prompt for tool permission in headless mode, so AionUi
             // registers itself as its PreToolUse hook; the hook process calls
             // back here to raise the user's permission card.

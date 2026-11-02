@@ -21,6 +21,10 @@ pub enum AgentError {
     Timeout(String),
     #[error("Rate limited")]
     RateLimited,
+    /// The shared key pool's daily request cap is exhausted for this user +
+    /// provider. Mapped to HTTP 429 with code `POOL_QUOTA_EXCEEDED`.
+    #[error("Shared pool daily quota exceeded")]
+    PoolQuotaExceeded,
     #[error("Conversation archived: {0}")]
     ConversationArchived(String),
     #[error("Workspace path is unavailable during execution: {0}")]
@@ -85,6 +89,7 @@ impl AgentError {
             | Self::WorkspacePathRuntimeUnavailable(message)
             | Self::Internal(message) => message.clone(),
             Self::RateLimited => "Rate limited".to_owned(),
+            Self::PoolQuotaExceeded => "Shared pool daily quota exceeded".to_owned(),
             Self::Acp(err) => err.to_string(),
         }
     }
